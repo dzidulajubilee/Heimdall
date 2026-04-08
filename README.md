@@ -1,11 +1,11 @@
-# Suricata Live Dashboard
+# Suricata Live Dashboard - Heimdall
 
 A real-time Suricata IDS alert dashboard with persistent storage, session authentication, and zero external dependencies.
 
 ```
 suricata-live/
 ├── server.py               ← Python backend (SSE + SQLite + auth)
-├── suricata-dashboard.html ← React dashboard (served by the backend)
+├── heimdall-dashboard.html ← React dashboard (served by the backend)
 ├── alerts.db               ← SQLite database (auto-created on first run)
 └── README.md
 ```
@@ -42,7 +42,7 @@ The backend tails `eve.json` in a background thread. Each new `alert` event is w
 
 ```bash
 mkdir -p /opt/suricata-live
-cp server.py suricata-dashboard.html /opt/suricata-live/
+cp server.py heimdall-dashboard.html /opt/suricata-live/
 cd /opt/suricata-live
 ```
 
