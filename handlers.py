@@ -71,6 +71,10 @@ class Handler(BaseHTTPRequestHandler):
     def _authed(self) -> bool:
         return self.auth.validate_session(self._token())
 
+    # Files under /frontend/ that must be publicly accessible
+    # (needed by the login page before any session exists)
+    _PUBLIC_FRONTEND = {"/frontend/login.js"}
+
     def _require_auth(self) -> bool:
         """
         Return True if the request is authenticated.
@@ -80,8 +84,10 @@ class Handler(BaseHTTPRequestHandler):
         if self._authed():
             return True
         p = urlparse(self.path).path
-        api_paths = ("/alerts", "/events", "/health", "/frontend/")
-        if any(p.startswith(x) for x in api_paths):
+        api_paths = ("/alerts", "/events", "/health")
+        if p.startswith("/frontend/") and p not in self._PUBLIC_FRONTEND:
+            self._json({"error": "Unauthorized"}, 401)
+        elif any(p.startswith(x) for x in api_paths):
             self._json({"error": "Unauthorized"}, 401)
         else:
             self._redirect("/login")
@@ -131,6 +137,9 @@ class Handler(BaseHTTPRequestHandler):
 
         if p.path == "/login":
             self._file(FRONTEND_DIR / "login.html", "text/html; charset=utf-8")
+            return
+        if p.path == "/frontend/login.js":
+            self._file(FRONTEND_DIR / "login.js", "application/javascript")
             return
         if p.path == "/logout":
             self._logout()
