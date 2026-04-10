@@ -461,7 +461,7 @@ sudo grep 2034635 /etc/suricata/threshold.conf
 
 ## License
 
-MIT License — see [LICENSE](LICENSE) for details.
+GNU General Public License v2.0 — see [LICENSE](LICENSE) for details.
 
 ---
 
