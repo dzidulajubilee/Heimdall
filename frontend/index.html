@@ -329,6 +329,28 @@ function fmtTime(ts) {
   catch { return '--:--:--'; }
 }
 
+function fmtBytes(n) {
+  if (!n || n === 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(n) / Math.log(1024));
+  return (n / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1) + ' ' + units[i];
+}
+
+function fmtDur(s) {
+  if (!s || s === 0) return '0s';
+  if (s < 60)  return s.toFixed(1) + 's';
+  if (s < 3600) return Math.floor(s / 60) + 'm ' + Math.floor(s % 60) + 's';
+  return Math.floor(s / 3600) + 'h ' + Math.floor((s % 3600) / 60) + 'm';
+}
+
+function statusClass(code) {
+  if (!code) return '';
+  if (code >= 500) return 'status-err';
+  if (code >= 400) return 'status-err';
+  if (code >= 300) return 'status-redir';
+  return 'status-ok';
+}
+
 // ── Clock ─────────────────────────────────────────────────────────────────────
 function Clock() {
   const [t, setT] = useState('');
