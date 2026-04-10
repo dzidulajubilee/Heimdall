@@ -58,7 +58,7 @@ def parse_eve_line(raw: str) -> dict | None:
     }
 
 
-def tail_thread(path: str, db, registry):
+def tail_thread(path: str, db, registry, wdb=None):
     """
     Runs forever in a daemon thread.
 
@@ -74,6 +74,7 @@ def tail_thread(path: str, db, registry):
         path:     Absolute path to eve.json.
         db:       AlertDB instance — receives insert() calls.
         registry: Registry instance — receives broadcast() calls.
+        wdb:      WebhookDB instance — optional, dispatches webhook notifications.
     """
     log.info("Tailing %s", path)
 
@@ -96,6 +97,9 @@ def tail_thread(path: str, db, registry):
                         if alert:
                             db.insert(alert)
                             registry.broadcast(alert)
+                            if wdb is not None:
+                                from webhooks import dispatch
+                                dispatch(alert, wdb)
                         pos = f.tell()
                     else:
                         # No new data — check for log rotation

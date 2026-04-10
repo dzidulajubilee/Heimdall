@@ -30,6 +30,7 @@ from database  import AlertDB
 from handlers  import Handler
 from registry  import Registry
 from tail      import purge_thread, tail_thread
+from webhooks  import WebhookDB, delivery_worker
 
 logging.basicConfig(
     level=logging.INFO,
@@ -90,10 +91,14 @@ def main():
     # ── Registry ──────────────────────────────────────────────────────────────
     registry = Registry()
 
+    # ── Webhook DB ────────────────────────────────────────────────────────────
+    wdb = WebhookDB(conn_fn=db._conn)
+
     # ── Wire dependencies into the handler ────────────────────────────────────
     Handler.db       = db
     Handler.auth     = auth
     Handler.registry = registry
+    Handler.wdb      = wdb
 
     # ── Log DB state ──────────────────────────────────────────────────────────
     s = db.stats()
@@ -105,7 +110,7 @@ def main():
     # ── Background threads ────────────────────────────────────────────────────
     threading.Thread(
         target=tail_thread,
-        args=(args.eve, db, registry),
+        args=(args.eve, db, registry, wdb),
         daemon=True,
         name="tail",
     ).start()
@@ -115,6 +120,13 @@ def main():
         args=(db, auth),
         daemon=True,
         name="purge",
+    ).start()
+
+    threading.Thread(
+        target=delivery_worker,
+        args=(wdb,),
+        daemon=True,
+        name="webhooks",
     ).start()
 
     # ── HTTP server ───────────────────────────────────────────────────────────

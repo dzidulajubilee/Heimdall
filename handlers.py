@@ -33,6 +33,11 @@ class Handler(BaseHTTPRequestHandler):
     GET  /alerts        → JSON alert history (requires auth)
     DELETE /alerts      → wipe database (requires auth)
     GET  /health        → JSON status (requires auth)
+    GET  /webhooks      → list all webhooks (requires auth)
+    POST /webhooks      → create webhook (requires auth)
+    PUT  /webhooks/<id> → update webhook (requires auth)
+    DELETE /webhooks/<id> → delete webhook (requires auth)
+    POST /webhooks/<id>/test → fire a test alert (requires auth)
     GET  /frontend/*    → static files: JS, CSS (requires auth)
     """
 
@@ -40,6 +45,7 @@ class Handler(BaseHTTPRequestHandler):
     db       = None
     auth     = None
     registry = None
+    wdb      = None   # WebhookDB instance
 
     # Suppress Python's default "Server: BaseHTTP/x Python/x" header
     # which triggers Suricata SID 2034635.
@@ -152,9 +158,11 @@ class Handler(BaseHTTPRequestHandler):
         if p.path in ("/", "/index.html"):
             self._file(FRONTEND_DIR / "index.html", "text/html; charset=utf-8")
         elif p.path == "/events":
-            self._sse()
+            self._serve_sse()
         elif p.path == "/alerts":
             self._serve_alerts(qs)
+        elif p.path == "/webhooks":
+            self._json(self.wdb.get_all())
         elif p.path == "/health":
             self._json({
                 "status":  "ok",
@@ -171,6 +179,30 @@ class Handler(BaseHTTPRequestHandler):
         p = urlparse(self.path)
         if p.path == "/login":
             self._do_login()
+            return
+        if not self._require_auth():
+            return
+        if p.path == "/webhooks":
+            self._webhook_create()
+        elif p.path.startswith("/webhooks/") and p.path.endswith("/test"):
+            try:
+                wid = int(p.path.split("/")[2])
+                self._webhook_test(wid)
+            except (ValueError, IndexError):
+                self.send_error(400)
+        else:
+            self.send_error(404)
+
+    def do_PUT(self):
+        if not self._require_auth():
+            return
+        p = urlparse(self.path)
+        if p.path.startswith("/webhooks/"):
+            try:
+                wid = int(p.path.split("/")[2])
+                self._webhook_update(wid)
+            except (ValueError, IndexError):
+                self.send_error(400)
         else:
             self.send_error(404)
 
@@ -180,6 +212,13 @@ class Handler(BaseHTTPRequestHandler):
         p = urlparse(self.path)
         if p.path == "/alerts":
             self._json({"deleted": self.db.clear_all()})
+        elif p.path.startswith("/webhooks/"):
+            try:
+                wid = int(p.path.split("/")[2])
+                self.wdb.delete(wid)
+                self._json({"deleted": wid})
+            except (ValueError, IndexError):
+                self.send_error(400)
         else:
             self.send_error(404)
 
@@ -265,7 +304,68 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _sse(self):
+    def _webhook_create(self):
+        try:
+            n    = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(n))
+        except Exception:
+            self._json({"error": "Bad request"}, 400); return
+
+        name       = str(body.get("name", "")).strip()
+        wtype      = str(body.get("type", "generic")).strip()
+        url        = str(body.get("url", "")).strip()
+        severities = body.get("severities", ["critical", "high", "medium", "low", "info"])
+        enabled    = bool(body.get("enabled", True))
+
+        if not name or not url:
+            self._json({"error": "name and url are required"}, 400); return
+        if wtype not in ("slack", "discord", "generic"):
+            self._json({"error": "type must be slack, discord, or generic"}, 400); return
+
+        wh = self.wdb.create(name, wtype, url, severities, enabled)
+        self._json(wh, 201)
+
+    def _webhook_update(self, wid: int):
+        if not self.wdb.get(wid):
+            self._json({"error": "Not found"}, 404); return
+        try:
+            n    = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(n))
+        except Exception:
+            self._json({"error": "Bad request"}, 400); return
+        wh = self.wdb.update(wid, **body)
+        self._json(wh)
+
+    def _webhook_test(self, wid: int):
+        wh = self.wdb.get(wid)
+        if not wh:
+            self._json({"error": "Not found"}, 404); return
+
+        from webhooks import build_payload, deliver
+        test_alert = {
+            "id":       "test-0",
+            "ts":       "2026-01-01T00:00:00+0000",
+            "src_ip":   "10.0.0.1",
+            "src_port": 12345,
+            "dst_ip":   "8.8.8.8",
+            "dst_port": 443,
+            "proto":    "TCP",
+            "iface":    "eth0",
+            "flow_id":  0,
+            "sig_id":   9999999,
+            "sig_msg":  "Heimdall Test Alert — webhook is working",
+            "category": "Test",
+            "severity": "medium",
+            "action":   "allowed",
+        }
+        payload = build_payload(wh["type"], test_alert)
+        error   = deliver(wh["url"], payload)
+        if error:
+            self._json({"ok": False, "error": error})
+        else:
+            self._json({"ok": True})
+
+    def _serve_sse(self):
         """Long-lived SSE response — blocks until client disconnects."""
         self.send_response(200)
         self.send_header("Content-Type",      "text/event-stream")

@@ -135,6 +135,86 @@ body {
   transition:  background .25s, color .25s;
 }
 
+
+/* ── Webhooks settings panel ── */
+.wh-panel      { flex:1; overflow-y:auto; padding:20px 24px; }
+.wh-section    { margin-bottom:28px; }
+.wh-section-title { font-size:11px; font-weight:600; letter-spacing:.08em;
+                    text-transform:uppercase; color:var(--text3);
+                    margin-bottom:12px; padding-bottom:8px;
+                    border-bottom:1px solid var(--border); }
+.wh-card       { background:var(--bg1); border:1px solid var(--border);
+                 border-radius:var(--radius-lg); padding:16px 18px;
+                 margin-bottom:10px; transition:border-color .15s; }
+.wh-card:hover { border-color:var(--border2); }
+.wh-card-header{ display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+.wh-name       { font-size:13px; font-weight:500; color:var(--text1); }
+.wh-type-badge { font-family:var(--mono); font-size:10px; padding:2px 7px;
+                 border-radius:var(--radius-sm); border:1px solid var(--border);
+                 color:var(--text3); background:var(--bg2); }
+.wh-url        { font-family:var(--mono); font-size:11px; color:var(--text2);
+                 margin-bottom:10px; overflow:hidden; text-overflow:ellipsis;
+                 white-space:nowrap; }
+.wh-sev-chips  { display:flex; flex-wrap:wrap; gap:5px; margin-bottom:12px; }
+.wh-sev-chip   { font-family:var(--mono); font-size:10px; padding:2px 8px;
+                 border-radius:20px; border:1px solid var(--border); }
+.wh-footer     { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.wh-stat       { font-family:var(--mono); font-size:10px; color:var(--text3); margin-left:auto; }
+.wh-error      { font-size:11px; color:var(--red); margin-top:6px;
+                 background:var(--red-d); padding:5px 9px;
+                 border-radius:var(--radius-sm); border:1px solid var(--red-d); }
+.toggle        { position:relative; width:36px; height:20px; flex-shrink:0; }
+.toggle input  { opacity:0; width:0; height:0; position:absolute; }
+.toggle-track  { position:absolute; inset:0; border-radius:20px;
+                 background:var(--bg3); border:1px solid var(--border2);
+                 cursor:pointer; transition:background .2s; }
+.toggle input:checked + .toggle-track { background:var(--accent); border-color:var(--accent); }
+.toggle-thumb  { position:absolute; top:2px; left:2px; width:14px; height:14px;
+                 border-radius:50%; background:white; transition:transform .2s;
+                 pointer-events:none; }
+.toggle input:checked ~ .toggle-thumb { transform:translateX(16px); }
+.form-row      { display:flex; flex-direction:column; gap:5px; margin-bottom:14px; }
+.form-label    { font-size:10px; font-weight:600; letter-spacing:.09em;
+                 text-transform:uppercase; color:var(--text3); }
+.form-input    { padding:8px 10px; background:var(--bg2);
+                 border:1px solid var(--border); border-radius:var(--radius-sm);
+                 color:var(--text1); font-size:12px; font-family:var(--sans);
+                 outline:none; transition:border-color .2s; }
+.form-input:focus { border-color:var(--accent); }
+.form-select   { padding:8px 10px; background:var(--bg2);
+                 border:1px solid var(--border); border-radius:var(--radius-sm);
+                 color:var(--text1); font-size:12px; font-family:var(--sans);
+                 outline:none; cursor:pointer; }
+.sev-check-row { display:flex; gap:8px; flex-wrap:wrap; }
+.sev-check     { display:flex; align-items:center; gap:5px; cursor:pointer;
+                 font-size:12px; color:var(--text2); padding:4px 10px;
+                 border-radius:20px; border:1px solid var(--border);
+                 transition:all .15s; user-select:none; }
+.sev-check.on  { color:var(--text1); border-color:var(--border2);
+                 background:var(--bg3); }
+.btn-add       { display:flex; align-items:center; gap:6px; padding:7px 14px;
+                 border-radius:var(--radius-sm); border:1px solid var(--accent);
+                 background:var(--accent-d); color:var(--accent);
+                 font-size:12px; font-family:var(--sans); cursor:pointer;
+                 transition:all .15s; }
+.btn-add:hover { background:var(--accent); color:white; }
+.btn-danger    { padding:4px 10px; border-radius:var(--radius-sm);
+                 border:1px solid var(--red-d); background:transparent;
+                 color:var(--red); font-size:11px; font-family:var(--sans);
+                 cursor:pointer; transition:all .15s; }
+.btn-danger:hover { background:var(--red-d); }
+.btn-test      { padding:4px 10px; border-radius:var(--radius-sm);
+                 border:1px solid var(--border2); background:transparent;
+                 color:var(--text2); font-size:11px; font-family:var(--sans);
+                 cursor:pointer; transition:all .15s; }
+.btn-test:hover { background:var(--bg3); color:var(--text1); }
+.test-ok       { font-size:11px; color:var(--green); font-family:var(--mono); }
+.test-fail     { font-size:11px; color:var(--red);   font-family:var(--mono); }
+.wh-empty      { text-align:center; padding:40px 20px; color:var(--text3);
+                 font-size:13px; }
+.wh-empty svg  { width:48px; height:48px; opacity:.15; margin-bottom:12px;
+                 display:block; margin-inline:auto; }
+
 /* ── Scrollbar ── */
 ::-webkit-scrollbar       { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -144,6 +224,7 @@ body {
 <body>
 <div id="root"></div>
 <script type="text/babel">
+
 // ── Themes ──
 
 const THEMES = [
@@ -367,9 +448,391 @@ function Detail({ alert }) {
   );
 }
 
+
+// ── WebhooksView component ────────────────────────────────────────────────────
+const SEV_OPTIONS = ['critical', 'high', 'medium', 'low', 'info'];
+const SEV_COLORS_WH = {
+  critical: 'var(--red)', high: 'var(--orange)',
+  medium: 'var(--yellow)', low: 'var(--green)', info: 'var(--accent)',
+};
+const TYPE_LABELS = { slack: 'Slack', discord: 'Discord', generic: 'Generic / Other' };
+
+function WebhookForm({ initial, onSave, onCancel }) {
+  const blank = { name: '', type: 'generic', url: '', enabled: true,
+                  severities: ['critical', 'high', 'medium', 'low', 'info'] };
+  const [form, setForm] = useState(initial || blank);
+  const [saving, setSaving]   = useState(false);
+  const [error,  setError]    = useState('');
+
+  function toggleSev(s) {
+    setForm(f => {
+      const sevs = f.severities.includes(s)
+        ? f.severities.filter(x => x !== s)
+        : [...f.severities, s];
+      return { ...f, severities: sevs };
+    });
+  }
+
+  async function handleSave() {
+    if (!form.name.trim()) { setError('Name is required.'); return; }
+    if (!form.url.trim())  { setError('URL is required.');  return; }
+    if (form.severities.length === 0) { setError('Select at least one severity.'); return; }
+    setSaving(true); setError('');
+    try {
+      const method = form.id ? 'PUT' : 'POST';
+      const url    = form.id ? `/webhooks/${form.id}` : '/webhooks';
+      const r = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      });
+      const data = await r.json();
+      if (!r.ok) { setError(data.error || 'Save failed.'); return; }
+      onSave(data);
+    } catch { setError('Network error.'); }
+    finally { setSaving(false); }
+  }
+
+  const inputStyle = {
+    width: '100%', padding: '8px 10px',
+    background: 'var(--bg2)', border: '1px solid var(--border2)',
+    borderRadius: 'var(--radius-sm)', color: 'var(--text1)',
+    fontSize: 12, fontFamily: 'var(--sans)', outline: 'none',
+  };
+  const labelStyle = {
+    display: 'block', fontSize: 10, fontWeight: 600,
+    letterSpacing: '.09em', textTransform: 'uppercase',
+    color: 'var(--text3)', marginBottom: 5,
+  };
+  const rowStyle = { marginBottom: 14 };
+
+  return (
+    <div style={{
+      background: 'var(--bg2)', border: '1px solid var(--border2)',
+      borderRadius: 'var(--radius-lg)', padding: 20, marginBottom: 16,
+    }}>
+      <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 16 }}>
+        {form.id ? 'Edit Webhook' : 'New Webhook'}
+      </div>
+
+      <div style={rowStyle}>
+        <label style={labelStyle}>Name</label>
+        <input style={inputStyle} placeholder="e.g. Security Alerts"
+          value={form.name} onChange={e => setForm(f => ({...f, name: e.target.value}))}/>
+      </div>
+
+      <div style={rowStyle}>
+        <label style={labelStyle}>Type</label>
+        <select style={{...inputStyle, cursor: 'pointer'}}
+          value={form.type} onChange={e => setForm(f => ({...f, type: e.target.value}))}>
+          <option value="slack">Slack</option>
+          <option value="discord">Discord</option>
+          <option value="generic">Generic / Other (Teams, Mattermost, custom…)</option>
+        </select>
+      </div>
+
+      <div style={rowStyle}>
+        <label style={labelStyle}>Webhook URL</label>
+        <input style={{...inputStyle, fontFamily: 'var(--mono)', fontSize: 11}}
+          placeholder={
+            form.type === 'slack'   ? 'https://hooks.slack.com/services/…' :
+            form.type === 'discord' ? 'https://discord.com/api/webhooks/…' :
+                                     'https://your-endpoint.com/webhook'
+          }
+          value={form.url} onChange={e => setForm(f => ({...f, url: e.target.value}))}/>
+      </div>
+
+      <div style={rowStyle}>
+        <label style={labelStyle}>Trigger on Severities</label>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {SEV_OPTIONS.map(s => {
+            const on = form.severities.includes(s);
+            return (
+              <div key={s} onClick={() => toggleSev(s)} style={{
+                display: 'flex', alignItems: 'center', gap: 5,
+                padding: '4px 10px', borderRadius: 20,
+                border: `1px solid ${on ? SEV_COLORS_WH[s] : 'var(--border)'}`,
+                background: on ? `${SEV_COLORS_WH[s]}18` : 'transparent',
+                color: on ? SEV_COLORS_WH[s] : 'var(--text3)',
+                fontSize: 11, fontFamily: 'var(--mono)',
+                cursor: 'pointer', userSelect: 'none', transition: 'all .15s',
+                textTransform: 'uppercase',
+              }}>
+                <div style={{
+                  width: 6, height: 6, borderRadius: '50%',
+                  background: on ? SEV_COLORS_WH[s] : 'var(--text3)',
+                }}/>
+                {s}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+        <div onClick={() => setForm(f => ({...f, enabled: !f.enabled}))} style={{
+          width: 34, height: 18, borderRadius: 9,
+          background: form.enabled ? 'var(--green)' : 'var(--bg3)',
+          position: 'relative', cursor: 'pointer', transition: 'background .2s',
+          border: '1px solid var(--border2)',
+        }}>
+          <div style={{
+            position: 'absolute', top: 2,
+            left: form.enabled ? 17 : 2,
+            width: 12, height: 12, borderRadius: '50%',
+            background: 'white', transition: 'left .2s',
+          }}/>
+        </div>
+        <span style={{ fontSize: 12, color: 'var(--text2)' }}>
+          {form.enabled ? 'Enabled' : 'Disabled'}
+        </span>
+      </div>
+
+      {error && (
+        <div style={{
+          marginBottom: 12, padding: '7px 10px', borderRadius: 5,
+          background: 'var(--red-d)', border: '1px solid var(--red)',
+          color: 'var(--red)', fontSize: 12,
+        }}>{error}</div>
+      )}
+
+      <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+        <button className="btn" onClick={onCancel} disabled={saving}>Cancel</button>
+        <button onClick={handleSave} disabled={saving} style={{
+          padding: '4px 14px', borderRadius: 'var(--radius-sm)',
+          border: '1px solid var(--accent)', background: 'var(--accent-d)',
+          color: 'var(--accent)', fontSize: 11, fontFamily: 'var(--sans)',
+          cursor: saving ? 'wait' : 'pointer',
+        }}>
+          {saving ? 'Saving…' : (form.id ? 'Save Changes' : 'Create Webhook')}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function WebhookCard({ wh, onEdit, onDelete, onTest }) {
+  const [testing,    setTesting]    = useState(false);
+  const [testResult, setTestResult] = useState(null); // null | 'ok' | 'error: ...'
+  const [delConfirm, setDelConfirm] = useState(false);
+
+  async function handleTest() {
+    setTesting(true); setTestResult(null);
+    try {
+      const r = await fetch(`/webhooks/${wh.id}/test`, { method: 'POST' });
+      const d = await r.json();
+      setTestResult(d.ok ? 'ok' : (d.error || 'failed'));
+    } catch { setTestResult('Network error'); }
+    finally { setTesting(false); }
+  }
+
+  const firedAt = wh.last_fired
+    ? new Date(wh.last_fired * 1000).toLocaleString('en-GB', {hour12:false})
+    : 'Never';
+
+  return (
+    <div style={{
+      background: 'var(--bg1)', border: '1px solid var(--border)',
+      borderRadius: 'var(--radius-lg)', padding: '14px 16px', marginBottom: 10,
+      borderLeft: `3px solid ${wh.enabled ? 'var(--green)' : 'var(--border2)'}`,
+    }}>
+      {/* Header row */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+        <div style={{
+          padding: '2px 8px', borderRadius: 4,
+          background: 'var(--bg3)', border: '1px solid var(--border)',
+          fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text2)',
+          textTransform: 'uppercase',
+        }}>{wh.type}</div>
+        <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--text1)' }}>{wh.name}</span>
+        <div style={{
+          marginLeft: 'auto', padding: '2px 8px', borderRadius: 10, fontSize: 10,
+          background: wh.enabled ? 'var(--green-d)' : 'var(--bg3)',
+          color: wh.enabled ? 'var(--green)' : 'var(--text3)',
+          border: `1px solid ${wh.enabled ? 'var(--green)' : 'var(--border)'}`,
+          fontFamily: 'var(--mono)',
+        }}>{wh.enabled ? 'ENABLED' : 'DISABLED'}</div>
+      </div>
+
+      {/* URL */}
+      <div style={{
+        fontFamily: 'var(--mono)', fontSize: 10, color: 'var(--text3)',
+        background: 'var(--bg2)', padding: '5px 8px', borderRadius: 4,
+        marginBottom: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      }}>{wh.url}</div>
+
+      {/* Severity pills */}
+      <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', marginBottom: 10 }}>
+        {SEV_OPTIONS.map(s => {
+          const on = (wh.severities || []).includes(s);
+          return (
+            <span key={s} style={{
+              padding: '1px 7px', borderRadius: 10, fontSize: 10,
+              fontFamily: 'var(--mono)', textTransform: 'uppercase',
+              background: on ? `${SEV_COLORS_WH[s]}18` : 'transparent',
+              color: on ? SEV_COLORS_WH[s] : 'var(--text3)',
+              border: `1px solid ${on ? SEV_COLORS_WH[s] : 'var(--border)'}`,
+              opacity: on ? 1 : 0.4,
+            }}>{s}</span>
+          );
+        })}
+      </div>
+
+      {/* Stats row */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 16,
+        fontSize: 10, fontFamily: 'var(--mono)', color: 'var(--text3)',
+        marginBottom: 12,
+      }}>
+        <span>Fired: <b style={{color:'var(--text2)'}}>{wh.fire_count || 0}</b></span>
+        <span>Last: <b style={{color:'var(--text2)'}}>{firedAt}</b></span>
+        {wh.last_error && (
+          <span style={{ color: 'var(--red)', marginLeft: 'auto' }}>
+            ⚠ {wh.last_error.slice(0, 60)}
+          </span>
+        )}
+      </div>
+
+      {/* Test result */}
+      {testResult && (
+        <div style={{
+          marginBottom: 10, padding: '6px 10px', borderRadius: 5, fontSize: 11,
+          background: testResult === 'ok' ? 'var(--green-d)' : 'var(--red-d)',
+          border: `1px solid ${testResult === 'ok' ? 'var(--green)' : 'var(--red)'}`,
+          color: testResult === 'ok' ? 'var(--green)' : 'var(--red)',
+        }}>
+          {testResult === 'ok' ? '✓ Test delivered successfully' : `✗ ${testResult}`}
+        </div>
+      )}
+
+      {/* Action buttons */}
+      <div style={{ display: 'flex', gap: 7 }}>
+        <button className="btn" onClick={handleTest} disabled={testing} style={{ fontSize: 11 }}>
+          {testing ? 'Sending…' : 'Test'}
+        </button>
+        <button className="btn" onClick={() => onEdit(wh)} style={{ fontSize: 11 }}>
+          Edit
+        </button>
+        {!delConfirm ? (
+          <button className="btn" onClick={() => setDelConfirm(true)}
+            style={{ fontSize: 11, marginLeft: 'auto' }}>
+            Delete
+          </button>
+        ) : (
+          <div style={{ display: 'flex', gap: 6, marginLeft: 'auto', alignItems: 'center' }}>
+            <span style={{ fontSize: 11, color: 'var(--text3)' }}>Confirm?</span>
+            <button className="btn" onClick={() => setDelConfirm(false)} style={{ fontSize: 11 }}>
+              Cancel
+            </button>
+            <button onClick={() => onDelete(wh.id)} style={{
+              padding: '4px 10px', borderRadius: 'var(--radius-sm)',
+              border: '1px solid var(--red)', background: 'var(--red-d)',
+              color: 'var(--red)', fontSize: 11, fontFamily: 'var(--sans)', cursor: 'pointer',
+            }}>
+              Delete
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function WebhooksView({ webhooks, loading, setLoading, onRefresh }) {
+  const [showForm, setShowForm]   = useState(false);
+  const [editing,  setEditing]    = useState(null); // null = new
+
+  async function handleDelete(id) {
+    await fetch(`/webhooks/${id}`, { method: 'DELETE' }).catch(() => {});
+    onRefresh();
+  }
+
+  function handleEdit(wh) {
+    setEditing(wh);
+    setShowForm(true);
+  }
+
+  function handleNew() {
+    setEditing(null);
+    setShowForm(true);
+  }
+
+  function handleSaved() {
+    setShowForm(false);
+    setEditing(null);
+    onRefresh();
+  }
+
+  return (
+    <div style={{
+      flex: 1, display: 'flex', flexDirection: 'column',
+      overflow: 'hidden', background: 'var(--bg0)',
+    }}>
+      {/* Header */}
+      <div className="pane-head">
+        <span className="pane-title">Webhook Notifications</span>
+        <span className="pane-cnt">{webhooks.length} configured</span>
+        <div className="pane-actions">
+          <button className="btn on" onClick={handleNew}>+ Add Webhook</button>
+        </div>
+      </div>
+
+      {/* Scrollable content */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: 20 }}>
+
+        {/* Guidance box */}
+        <div style={{
+          background: 'var(--accent-d)', border: '1px solid rgba(79,156,249,.2)',
+          borderRadius: 'var(--radius-md)', padding: '10px 14px',
+          fontSize: 12, color: 'var(--text2)', marginBottom: 20, lineHeight: 1.7,
+        }}>
+          <b style={{color:'var(--accent)'}}>Webhooks</b> send a POST request to your URL whenever
+          a matching alert fires. Choose <b style={{color:'var(--text1)'}}>Slack</b> or{' '}
+          <b style={{color:'var(--text1)'}}>Discord</b> for formatted messages, or{' '}
+          <b style={{color:'var(--text1)'}}>Generic</b> for a plain JSON payload compatible
+          with Teams, Mattermost, or any custom endpoint.
+          Use the <b style={{color:'var(--text1)'}}>severity filter</b> to only send the alerts
+          that matter.
+        </div>
+
+        {/* Add / Edit form */}
+        {showForm && (
+          <WebhookForm
+            initial={editing}
+            onSave={handleSaved}
+            onCancel={() => { setShowForm(false); setEditing(null); }}
+          />
+        )}
+
+        {/* Webhook cards */}
+        {webhooks.length === 0 && !showForm && (
+          <div className="empty" style={{ height: 200 }}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1">
+              <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+              <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+            </svg>
+            <div>No webhooks configured</div>
+            <div style={{fontSize:11}}>Click "+ Add Webhook" to get started</div>
+          </div>
+        )}
+        {webhooks.map(wh => (
+          <WebhookCard
+            key={wh.id}
+            wh={wh}
+            onEdit={handleEdit}
+            onDelete={handleDelete}
+            onTest={() => {}}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ── App ───────────────────────────────────────────────────────────────────────
 function App() {
   // ── State ──────────────────────────────────────────────────────────────────
+  const [view,         setView]         = useState('alerts');
   const [alerts,       setAlerts]       = useState([]);
   const [selected,     setSelected]     = useState(null);
   const [paused,       setPaused]       = useState(false);
@@ -386,6 +849,9 @@ function App() {
   const [theme,        setTheme]        = useState(
     () => localStorage.getItem('heimdall-theme') || 'night'
   );
+  const [activeView,   setActiveView]   = useState('alerts'); // 'alerts' | 'webhooks'
+  const [webhooks,     setWebhooks]     = useState([]);
+  const [whLoading,    setWhLoading]    = useState(false);
 
   const pausedRef   = useRef(false);
   const accumRef    = useRef(0);
@@ -397,6 +863,15 @@ function App() {
     document.documentElement.setAttribute('data-theme', theme);
     localStorage.setItem('heimdall-theme', theme);
   }, [theme]);
+
+  // ── Fetch webhooks ────────────────────────────────────────────────────────────
+  const fetchWebhooks = () => {
+    fetch('/webhooks')
+      .then(r => r.json())
+      .then(data => { if (Array.isArray(data)) setWebhooks(data); })
+      .catch(() => {});
+  };
+  useEffect(() => { fetchWebhooks(); }, []);
 
   // ── Load history ───────────────────────────────────────────────────────────
   useEffect(() => {
@@ -586,7 +1061,8 @@ function App() {
       {/* ── Sidebar ── */}
       <aside className="sidebar">
         <div className="s-label">Views</div>
-        <div className="nav-item active">
+        <div className={`nav-item${activeView === 'alerts' ? ' active' : ''}`}
+             onClick={() => setActiveView('alerts')}>
           <svg width="14" height="14" viewBox="0 0 16 16"
                fill="none" stroke="currentColor" strokeWidth="1.5">
             <path d="M8 2L14 13H2L8 2Z"/>
@@ -598,11 +1074,27 @@ function App() {
             {alerts.length > 999 ? '999+' : alerts.length}
           </span>
         </div>
+        <div className={`nav-item${activeView === 'webhooks' ? ' active' : ''}`}
+             onClick={() => { setActiveView('webhooks'); fetchWebhooks(); }}>
+          <svg width="14" height="14" viewBox="0 0 16 16"
+               fill="none" stroke="currentColor" strokeWidth="1.5">
+            <path d="M2 4h12M2 8h8M2 12h10"/>
+            <circle cx="13" cy="12" r="2" fill="currentColor" stroke="none"/>
+          </svg>
+          Webhooks
+          <span style={{
+            marginLeft:'auto', fontFamily:'var(--mono)', fontSize:10,
+            padding:'1px 6px', borderRadius:10,
+            background:'var(--accent-d)', color:'var(--accent)'
+          }}>
+            {webhooks.filter(w => w.enabled).length}
+          </span>
+        </div>
 
-        <div className="divider"/>
+        {activeView === 'alerts' && <div className="divider"/>}
 
-        <div className="s-label">Severity</div>
-        {['critical', 'high', 'medium', 'low', 'info'].map(s => (
+        {activeView === 'alerts' && <div className="s-label">Severity</div>}
+        {activeView === 'alerts' && ['critical', 'high', 'medium', 'low', 'info'].map(s => (
           <div key={s}
                className={`sev-row${activeSev.has(s) ? ' on' : ''}`}
                onClick={() => toggleSev(s)}>
@@ -612,16 +1104,16 @@ function App() {
           </div>
         ))}
 
-        <div className="divider"/>
+        {activeView === 'alerts' && <div className="divider"/>}
 
-        <div className="s-label">Top Sources</div>
-        {topSrcs.map(([ip, cnt]) => (
+        {activeView === 'alerts' && <div className="s-label">Top Sources</div>}
+        {activeView === 'alerts' && topSrcs.map(([ip, cnt]) => (
           <div key={ip} className="src-row">
             <span className="src-ip">{ip}</span>
             <span className="src-cnt">{cnt}</span>
           </div>
         ))}
-        {topSrcs.length === 0 && (
+        {activeView === 'alerts' && topSrcs.length === 0 && (
           <div style={{
             padding: '4px 18px', fontSize: 11,
             color: 'var(--text3)', fontFamily: 'var(--mono)',
@@ -630,7 +1122,7 @@ function App() {
       </aside>
 
       {/* ── Main ── */}
-      <main className="main">
+      <main className="main" style={{display: activeView === 'alerts' ? '' : 'none'}}>
 
         {/* Metrics */}
         <div className="metrics">
@@ -765,6 +1257,17 @@ function App() {
         </div>
       </main>
 
+      {/* ── Webhooks view ── */}
+      {activeView === 'webhooks' && (
+        <WebhooksView
+          webhooks={webhooks}
+          loading={whLoading}
+          setLoading={setWhLoading}
+          onRefresh={fetchWebhooks}
+        />
+      )}
+
+
       {/* Confirm clear modal */}
       {showConfirm && (
         <div className="modal-bg" onClick={() => setShowConfirm(false)}>
@@ -814,6 +1317,7 @@ function App() {
 
 // ── Mount ─────────────────────────────────────────────────────────────────────
 ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+
 </script>
 </body>
 </html>
