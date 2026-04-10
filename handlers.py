@@ -31,6 +31,9 @@ class Handler(BaseHTTPRequestHandler):
     GET  /logout        → revoke session, redirect to /login
     GET  /events        → SSE stream (requires auth)
     GET  /alerts        → JSON alert history (requires auth)
+    GET  /flows         → JSON flow events (requires auth)
+    GET  /dns           → JSON DNS events (requires auth)
+    GET  /http          → JSON HTTP events (requires auth)
     DELETE /alerts      → wipe database (requires auth)
     GET  /health        → JSON status (requires auth)
     GET  /webhooks      → list all webhooks (requires auth)
@@ -90,7 +93,7 @@ class Handler(BaseHTTPRequestHandler):
         if self._authed():
             return True
         p = urlparse(self.path).path
-        api_paths = ("/alerts", "/events", "/health")
+        api_paths = ("/alerts", "/flows", "/dns", "/http", "/events", "/health")
         if p.startswith("/frontend/") and p not in self._PUBLIC_FRONTEND:
             self._json({"error": "Unauthorized"}, 401)
         elif any(p.startswith(x) for x in api_paths):
@@ -161,6 +164,12 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_sse()
         elif p.path == "/alerts":
             self._serve_alerts(qs)
+        elif p.path == "/flows":
+            self._serve_table("flows", qs)
+        elif p.path == "/dns":
+            self._serve_table("dns", qs)
+        elif p.path == "/http":
+            self._serve_table("http", qs)
         elif p.path == "/webhooks":
             self._json(self.wdb.get_all())
         elif p.path == "/health":
@@ -292,6 +301,25 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     # ── Data endpoints ────────────────────────────────────────────────────────
+
+    def _serve_table(self, table: str, qs: dict):
+        """Serve flows/dns/http event history as JSON."""
+        days  = self._qs_int(qs, "days",  RETAIN_DAYS, 1, RETAIN_DAYS)
+        limit = self._qs_int(qs, "limit", 5000,         1, 20000)
+        fetch = {
+            "flows": self.db.fetch_flows,
+            "dns":   self.db.fetch_dns,
+            "http":  self.db.fetch_http,
+        }.get(table)
+        if fetch is None:
+            self.send_error(404); return
+        body = json.dumps(fetch(days=days, limit=limit)).encode()
+        self.send_response(200)
+        self.send_header("Content-Type",   "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control",  "no-cache")
+        self.end_headers()
+        self.wfile.write(body)
 
     def _serve_alerts(self, qs: dict):
         days  = self._qs_int(qs, "days",  RETAIN_DAYS, 1, RETAIN_DAYS)

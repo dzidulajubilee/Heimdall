@@ -29,6 +29,7 @@ html, body, #root { height: 100%; }
   --yellow: #f5c842; --yellow-d: rgba(245,200,66,0.13);
   --green:  #4caf82; --green-d:  rgba(76,175,130,0.13);
   --purple: #9f7aea;
+  --teal: #2dd4bf; --teal-d: rgba(45,212,191,0.13);
   --mono:   'IBM Plex Mono', monospace;
   --sans:   'IBM Plex Sans', system-ui, sans-serif;
   --shadow: none;
@@ -449,6 +450,338 @@ function Detail({ alert }) {
 }
 
 
+
+// ── FlowsView ─────────────────────────────────────────────────────────────────
+function FlowsView({ rows, loading, selected, onSelect }) {
+  const [search, setSearch] = useState('');
+  const q = search.toLowerCase();
+  const filtered = rows.filter(r =>
+    !q || r.src_ip?.includes(q) || r.dst_ip?.includes(q) ||
+    r.proto?.toLowerCase().includes(q) || r.app_proto?.toLowerCase().includes(q)
+  );
+
+  return (
+    <div style={{display:'flex',flexDirection:'column',overflow:'hidden',flex:1}}>
+      <div className="pane-head">
+        <span className="pane-title" style={{color:'var(--teal)'}}>Flow Events</span>
+        <span className="pane-cnt">{filtered.length.toLocaleString()}</span>
+        <div className="pane-actions">
+          <div className="search">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <circle cx="7" cy="7" r="4"/><path d="M10 10l3 3"/>
+            </svg>
+            <input placeholder="Filter flows…" value={search} onChange={e=>setSearch(e.target.value)}/>
+          </div>
+        </div>
+      </div>
+      <div className="tscroll">
+        {loading ? (
+          <div className="empty"><div>Loading…</div></div>
+        ) : filtered.length === 0 ? (
+          <div className="empty">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+            <div>No flow events yet</div>
+          </div>
+        ) : (
+          <table>
+            <thead><tr>
+              <th style={{width:80}}>Time</th>
+              <th style={{width:52}}>Proto</th>
+              <th style={{width:105}}>Source</th>
+              <th style={{width:105}}>Destination</th>
+              <th style={{width:72}}>App Proto</th>
+              <th style={{width:70}}>State</th>
+              <th style={{width:80}}>↑ Bytes</th>
+              <th style={{width:80}}>↓ Bytes</th>
+              <th style={{width:65}}>Duration</th>
+              <th style={{width:52}}>Alert</th>
+            </tr></thead>
+            <tbody>
+              {filtered.slice(0,300).map((r,i) => (
+                <tr key={r.flow_id||i}
+                    className={`arow${selected?.flow_id===r.flow_id?' sel':''}`}
+                    onClick={()=>onSelect(r)}>
+                  <td className="mono-dim">{fmtTime(r.ts)}</td>
+                  <td><span className="proto">{r.proto}</span></td>
+                  <td className="mono">{r.src_ip}:{r.src_port}</td>
+                  <td className="mono">{r.dst_ip}:{r.dst_port}</td>
+                  <td className="mono-dim">{r.app_proto||'—'}</td>
+                  <td className="mono-dim">{r.state}</td>
+                  <td className="mono-dim">{fmtBytes(r.bytes_toserver)}</td>
+                  <td className="mono-dim">{fmtBytes(r.bytes_toclient)}</td>
+                  <td className="mono-dim">{fmtDur(r.duration_s)}</td>
+                  <td><span style={{color:r.alerted?'var(--red)':'var(--text3)',fontSize:10,fontFamily:'var(--mono)'}}>{r.alerted?'YES':'—'}</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── FlowDetail ────────────────────────────────────────────────────────────────
+function FlowDetail({ item }) {
+  if (!item) return (
+    <div className="dscroll">
+      <div className="empty" style={{height:'100%'}}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+        <div>Select a flow</div>
+      </div>
+    </div>
+  );
+  const F = ({label,val,full,color})=>(
+    <div className={`dfield${full?' dfull':''}`}>
+      <div className="dfield-label">{label}</div>
+      <div className="dfield-val" style={color?{color}:{}}>{val??'—'}</div>
+    </div>
+  );
+  return (
+    <div className="dscroll">
+      <div className="dsec">
+        <div className="dsec-title">Connection</div>
+        <div className="dgrid">
+          <F label="Source IP"    val={item.src_ip}/>
+          <F label="Source Port"  val={item.src_port}/>
+          <F label="Dest IP"      val={item.dst_ip}/>
+          <F label="Dest Port"    val={item.dst_port}/>
+          <F label="Protocol"     val={item.proto}/>
+          <F label="App Protocol" val={item.app_proto||'—'}/>
+          <F label="State"        val={item.state}/>
+          <F label="Reason"       val={item.reason}/>
+          <F label="Duration"     val={fmtDur(item.duration_s)}/>
+          <F label="Alerted"      val={item.alerted?'Yes':'No'} color={item.alerted?'var(--red)':'var(--green)'}/>
+        </div>
+      </div>
+      <div className="dsec">
+        <div className="dsec-title">Traffic</div>
+        <div className="dgrid">
+          <F label="Pkts → Server"  val={item.pkts_toserver}/>
+          <F label="Pkts → Client"  val={item.pkts_toclient}/>
+          <F label="Bytes → Server" val={fmtBytes(item.bytes_toserver)}/>
+          <F label="Bytes → Client" val={fmtBytes(item.bytes_toclient)}/>
+          <F label="Timestamp" val={item.ts} full/>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── DNSView ───────────────────────────────────────────────────────────────────
+function DNSView({ rows, loading, selected, onSelect }) {
+  const [search, setSearch] = useState('');
+  const q = search.toLowerCase();
+  const filtered = rows.filter(r =>
+    !q || r.rrname?.toLowerCase().includes(q) || r.src_ip?.includes(q) ||
+    r.rrtype?.toLowerCase().includes(q) || r.rcode?.toLowerCase().includes(q)
+  );
+
+  return (
+    <div style={{display:'flex',flexDirection:'column',overflow:'hidden',flex:1}}>
+      <div className="pane-head">
+        <span className="pane-title" style={{color:'var(--purple)'}}>DNS Queries</span>
+        <span className="pane-cnt">{filtered.length.toLocaleString()}</span>
+        <div className="pane-actions">
+          <div className="search">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <circle cx="7" cy="7" r="4"/><path d="M10 10l3 3"/>
+            </svg>
+            <input placeholder="Filter by name, IP…" value={search} onChange={e=>setSearch(e.target.value)}/>
+          </div>
+        </div>
+      </div>
+      <div className="tscroll">
+        {loading ? (
+          <div className="empty"><div>Loading…</div></div>
+        ) : filtered.length === 0 ? (
+          <div className="empty">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+            <div>No DNS events yet</div>
+          </div>
+        ) : (
+          <table>
+            <thead><tr>
+              <th style={{width:80}}>Time</th>
+              <th style={{width:60}}>Type</th>
+              <th>Query Name</th>
+              <th style={{width:60}}>RR Type</th>
+              <th style={{width:60}}>RCode</th>
+              <th style={{width:105}}>Source</th>
+              <th style={{width:105}}>Resolver</th>
+            </tr></thead>
+            <tbody>
+              {filtered.slice(0,300).map((r,i) => (
+                <tr key={r.id||i}
+                    className={`arow${selected?.id===r.id?' sel':''}`}
+                    onClick={()=>onSelect(r)}>
+                  <td className="mono-dim">{fmtTime(r.ts)}</td>
+                  <td><span className="proto">{r.dns_type}</span></td>
+                  <td style={{fontSize:12,color:'var(--text1)',fontFamily:'var(--mono)',maxWidth:0,overflow:'hidden',textOverflow:'ellipsis'}}>{r.rrname||'—'}</td>
+                  <td className="mono-dim">{r.rrtype||'—'}</td>
+                  <td className="mono-dim">{r.rcode||'—'}</td>
+                  <td className="mono">{r.src_ip}</td>
+                  <td className="mono">{r.dst_ip}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── DNSDetail ─────────────────────────────────────────────────────────────────
+function DNSDetail({ item }) {
+  if (!item) return (
+    <div className="dscroll">
+      <div className="empty" style={{height:'100%'}}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/></svg>
+        <div>Select a DNS event</div>
+      </div>
+    </div>
+  );
+  const F = ({label,val,full})=>(
+    <div className={`dfield${full?' dfull':''}`}>
+      <div className="dfield-label">{label}</div>
+      <div className="dfield-val">{val??'—'}</div>
+    </div>
+  );
+  return (
+    <div className="dscroll">
+      <div className="dsec">
+        <div className="dsec-title">DNS Query</div>
+        <div className="dgrid">
+          <F label="Name"       val={item.rrname} full/>
+          <F label="Type"       val={item.dns_type}/>
+          <F label="RR Type"    val={item.rrtype}/>
+          <F label="RCode"      val={item.rcode}/>
+          <F label="TTL"        val={item.ttl?item.ttl+'s':'—'}/>
+          <F label="Source IP"  val={item.src_ip}/>
+          <F label="Resolver"   val={item.dst_ip}/>
+          <F label="Flow ID"    val={item.flow_id}/>
+          <F label="TX ID"      val={item.tx_id}/>
+          <F label="Timestamp"  val={item.ts} full/>
+        </div>
+      </div>
+      {item.answers && item.answers.length > 0 && (
+        <div className="dsec">
+          <div className="dsec-title">Answers</div>
+          <pre className="rawjson">{JSON.stringify(item.answers, null, 2)}</pre>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── HTTPView ──────────────────────────────────────────────────────────────────
+function HTTPView({ rows, loading, selected, onSelect }) {
+  const [search, setSearch] = useState('');
+  const q = search.toLowerCase();
+  const filtered = rows.filter(r =>
+    !q || r.hostname?.toLowerCase().includes(q) || r.url?.toLowerCase().includes(q) ||
+    r.src_ip?.includes(q) || r.method?.toLowerCase().includes(q)
+  );
+
+  return (
+    <div style={{display:'flex',flexDirection:'column',overflow:'hidden',flex:1}}>
+      <div className="pane-head">
+        <span className="pane-title" style={{color:'var(--orange)'}}>HTTP Events</span>
+        <span className="pane-cnt">{filtered.length.toLocaleString()}</span>
+        <div className="pane-actions">
+          <div className="search">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <circle cx="7" cy="7" r="4"/><path d="M10 10l3 3"/>
+            </svg>
+            <input placeholder="Filter by host, URL, IP…" value={search} onChange={e=>setSearch(e.target.value)}/>
+          </div>
+        </div>
+      </div>
+      <div className="tscroll">
+        {loading ? (
+          <div className="empty"><div>Loading…</div></div>
+        ) : filtered.length === 0 ? (
+          <div className="empty">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+            <div>No HTTP events yet</div>
+          </div>
+        ) : (
+          <table>
+            <thead><tr>
+              <th style={{width:80}}>Time</th>
+              <th style={{width:55}}>Method</th>
+              <th style={{width:52}}>Status</th>
+              <th style={{width:140}}>Host</th>
+              <th>URL</th>
+              <th style={{width:105}}>Client</th>
+            </tr></thead>
+            <tbody>
+              {filtered.slice(0,300).map((r,i) => (
+                <tr key={r.id||i}
+                    className={`arow${selected?.id===r.id?' sel':''}`}
+                    onClick={()=>onSelect(r)}>
+                  <td className="mono-dim">{fmtTime(r.ts)}</td>
+                  <td className="mono-dim">{r.method||'—'}</td>
+                  <td><span className={statusClass(r.status)} style={{fontFamily:'var(--mono)',fontSize:11}}>{r.status||'—'}</span></td>
+                  <td className="mono" style={{color:'var(--text1)'}}>{r.hostname||'—'}</td>
+                  <td style={{fontSize:11,color:'var(--text2)',fontFamily:'var(--mono)',maxWidth:0,overflow:'hidden',textOverflow:'ellipsis'}}>{r.url||'—'}</td>
+                  <td className="mono">{r.src_ip}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── HTTPDetail ────────────────────────────────────────────────────────────────
+function HTTPDetail({ item }) {
+  if (!item) return (
+    <div className="dscroll">
+      <div className="empty" style={{height:'100%'}}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+        <div>Select an HTTP event</div>
+      </div>
+    </div>
+  );
+  const F = ({label,val,full,color})=>(
+    <div className={`dfield${full?' dfull':''}`}>
+      <div className="dfield-label">{label}</div>
+      <div className="dfield-val" style={color?{color}:{}}>{val??'—'}</div>
+    </div>
+  );
+  const sc = item.status;
+  const scColor = sc>=400?'var(--red)':sc>=300?'var(--yellow)':'var(--green)';
+  return (
+    <div className="dscroll">
+      <div className="dsec">
+        <div className="dsec-title">Request</div>
+        <div className="dgrid">
+          <F label="Method"      val={item.method}/>
+          <F label="Status"      val={item.status} color={scColor}/>
+          <F label="Hostname"    val={item.hostname} full/>
+          <F label="URL"         val={item.url}      full/>
+          <F label="Protocol"    val={item.protocol}/>
+          <F label="Source IP"   val={item.src_ip}/>
+        </div>
+      </div>
+      <div className="dsec">
+        <div className="dsec-title">Client</div>
+        <div className="dgrid">
+          <F label="User-Agent"   val={item.user_agent}   full/>
+          <F label="Content-Type" val={item.content_type} full/>
+          <F label="Req Bytes"    val={fmtBytes(item.req_bytes)}/>
+          <F label="Resp Bytes"   val={fmtBytes(item.resp_bytes)}/>
+          <F label="Timestamp"    val={item.ts} full/>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── WebhooksView component ────────────────────────────────────────────────────
 const SEV_OPTIONS = ['critical', 'high', 'medium', 'low', 'info'];
 const SEV_COLORS_WH = {
@@ -852,6 +1185,13 @@ function App() {
   const [activeView,   setActiveView]   = useState('alerts'); // 'alerts' | 'webhooks'
   const [webhooks,     setWebhooks]     = useState([]);
   const [whLoading,    setWhLoading]    = useState(false);
+  const [flows,        setFlows]        = useState([]);
+  const [dnsEvents,    setDnsEvents]    = useState([]);
+  const [httpEvents,   setHttpEvents]   = useState([]);
+  const [flowSel,      setFlowSel]      = useState(null);
+  const [dnsSel,       setDnsSel]       = useState(null);
+  const [httpSel,      setHttpSel]      = useState(null);
+  const [evtLoading,   setEvtLoading]   = useState(false);
 
   const pausedRef   = useRef(false);
   const accumRef    = useRef(0);
@@ -889,6 +1229,31 @@ function App() {
       .catch(() => {});
   }, []);
 
+  // ── Load flow/dns/http history on first view ────────────────────────────────
+  useEffect(() => {
+    if (activeView === 'flows' && flows.length === 0) {
+      setEvtLoading(true);
+      fetch('/flows?limit=5000').then(r=>r.json()).then(d=>{
+        if(Array.isArray(d)) setFlows(d.map(r=>({...r,tsStr:fmtTime(r.ts)})));
+        setEvtLoading(false);
+      }).catch(()=>setEvtLoading(false));
+    }
+    if (activeView === 'dns' && dnsEvents.length === 0) {
+      setEvtLoading(true);
+      fetch('/dns?limit=5000').then(r=>r.json()).then(d=>{
+        if(Array.isArray(d)) setDnsEvents(d.map(r=>({...r,tsStr:fmtTime(r.ts)})));
+        setEvtLoading(false);
+      }).catch(()=>setEvtLoading(false));
+    }
+    if (activeView === 'http' && httpEvents.length === 0) {
+      setEvtLoading(true);
+      fetch('/http?limit=5000').then(r=>r.json()).then(d=>{
+        if(Array.isArray(d)) setHttpEvents(d.map(r=>({...r,tsStr:fmtTime(r.ts)})));
+        setEvtLoading(false);
+      }).catch(()=>setEvtLoading(false));
+    }
+  }, [activeView]);
+
   // ── SSE connection ─────────────────────────────────────────────────────────
   useEffect(() => {
     let es;
@@ -913,6 +1278,33 @@ function App() {
             if (prev.some(x => x.id === evt.id)) return prev;
             return [evt, ...prev].slice(0, MAX_ALERTS);
           });
+        } catch {}
+      });
+
+      es.addEventListener('flow', e => {
+        try {
+          const evt = JSON.parse(e.data);
+          evt.tsStr = fmtTime(evt.ts);
+          setFlows(prev => {
+            if (prev.some(x => x.flow_id === evt.flow_id)) return prev;
+            return [evt, ...prev].slice(0, MAX_ALERTS);
+          });
+        } catch {}
+      });
+
+      es.addEventListener('dns', e => {
+        try {
+          const evt = JSON.parse(e.data);
+          evt.tsStr = fmtTime(evt.ts);
+          setDnsEvents(prev => [evt, ...prev].slice(0, MAX_ALERTS));
+        } catch {}
+      });
+
+      es.addEventListener('http', e => {
+        try {
+          const evt = JSON.parse(e.data);
+          evt.tsStr = fmtTime(evt.ts);
+          setHttpEvents(prev => [evt, ...prev].slice(0, MAX_ALERTS));
         } catch {}
       });
 
@@ -1074,6 +1466,48 @@ function App() {
             {alerts.length > 999 ? '999+' : alerts.length}
           </span>
         </div>
+        <div className={`nav-item${activeView === 'flows' ? ' active' : ''}`}
+             style={activeView==='flows'?{background:'var(--teal-d)',color:'var(--teal)',borderColor:'rgba(45,212,191,.2)'}:{}}
+             onClick={() => setActiveView('flows')}>
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <path d="M2 4h12M2 8h8M2 12h10"/>
+          </svg>
+          Flow Events
+          <span style={{marginLeft:'auto',fontFamily:'var(--mono)',fontSize:10,
+                        padding:'1px 6px',borderRadius:10,
+                        background:'var(--teal-d)',color:'var(--teal)'}}>
+            {flows.length > 999 ? '999+' : flows.length}
+          </span>
+        </div>
+
+        <div className={`nav-item${activeView === 'dns' ? ' active' : ''}`}
+             style={activeView==='dns'?{background:'rgba(159,122,234,.14)',color:'var(--purple)',borderColor:'rgba(159,122,234,.2)'}:{}}
+             onClick={() => setActiveView('dns')}>
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2a9 9 0 010 12"/>
+          </svg>
+          DNS Queries
+          <span style={{marginLeft:'auto',fontFamily:'var(--mono)',fontSize:10,
+                        padding:'1px 6px',borderRadius:10,
+                        background:'rgba(159,122,234,.14)',color:'var(--purple)'}}>
+            {dnsEvents.length > 999 ? '999+' : dnsEvents.length}
+          </span>
+        </div>
+
+        <div className={`nav-item${activeView === 'http' ? ' active' : ''}`}
+             style={activeView==='http'?{background:'var(--orange-d)',color:'var(--orange)',borderColor:'rgba(245,148,74,.2)'}:{}}
+             onClick={() => setActiveView('http')}>
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <rect x="2" y="3" width="12" height="10" rx="1"/><path d="M2 6h12"/>
+          </svg>
+          HTTP Events
+          <span style={{marginLeft:'auto',fontFamily:'var(--mono)',fontSize:10,
+                        padding:'1px 6px',borderRadius:10,
+                        background:'var(--orange-d)',color:'var(--orange)'}}>
+            {httpEvents.length > 999 ? '999+' : httpEvents.length}
+          </span>
+        </div>
+
         <div className={`nav-item${activeView === 'webhooks' ? ' active' : ''}`}
              onClick={() => { setActiveView('webhooks'); fetchWebhooks(); }}>
           <svg width="14" height="14" viewBox="0 0 16 16"
@@ -1134,11 +1568,17 @@ function App() {
             { label: 'Unique Sources',  val: uniqueSrcs,      color: '' },
             { label: 'Top Category',    val: topCat.name,     color: '',
               sub: topCat.count ? `${topCat.count} alerts` : '' },
+            { label: 'Flows',           val: flows.length,    color: 'var(--teal)' },
+            { label: 'DNS / HTTP',      val: `${dnsEvents.length} / ${httpEvents.length}`, color: 'var(--purple)', small: true },
           ].map(m => (
             <div key={m.label} className="metric">
               <div className="metric-label">{m.label}</div>
               <div className="metric-val"
-                   style={m.color ? { color: m.color } : { fontSize: m.label === 'Top Category' ? 14 : undefined, paddingTop: m.label === 'Top Category' ? 4 : undefined }}>
+                   style={{
+                     color: m.color || undefined,
+                     fontSize: (m.label === 'Top Category' || m.small) ? 14 : undefined,
+                     paddingTop: (m.label === 'Top Category' || m.small) ? 4 : undefined,
+                   }}>
                 {m.val}
               </div>
               {m.sub && <div className="metric-sub">{m.sub}</div>}
@@ -1256,6 +1696,45 @@ function App() {
           </div>
         </div>
       </main>
+
+      {/* ── Flow Events view ── */}
+      {activeView === 'flows' && (
+        <main className="main">
+          <div className="content" style={{gridTemplateColumns:'1fr 310px'}}>
+            <FlowsView rows={flows} loading={evtLoading} selected={flowSel} onSelect={setFlowSel}/>
+            <div className="detail">
+              <div className="pane-head"><span className="pane-title">Flow Detail</span></div>
+              <FlowDetail item={flowSel}/>
+            </div>
+          </div>
+        </main>
+      )}
+
+      {/* ── DNS view ── */}
+      {activeView === 'dns' && (
+        <main className="main">
+          <div className="content" style={{gridTemplateColumns:'1fr 310px'}}>
+            <DNSView rows={dnsEvents} loading={evtLoading} selected={dnsSel} onSelect={setDnsSel}/>
+            <div className="detail">
+              <div className="pane-head"><span className="pane-title">DNS Detail</span></div>
+              <DNSDetail item={dnsSel}/>
+            </div>
+          </div>
+        </main>
+      )}
+
+      {/* ── HTTP view ── */}
+      {activeView === 'http' && (
+        <main className="main">
+          <div className="content" style={{gridTemplateColumns:'1fr 310px'}}>
+            <HTTPView rows={httpEvents} loading={evtLoading} selected={httpSel} onSelect={setHttpSel}/>
+            <div className="detail">
+              <div className="pane-head"><span className="pane-title">HTTP Detail</span></div>
+              <HTTPDetail item={httpSel}/>
+            </div>
+          </div>
+        </main>
+      )}
 
       {/* ── Webhooks view ── */}
       {activeView === 'webhooks' && (

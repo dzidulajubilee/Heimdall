@@ -1,8 +1,7 @@
 """
-Heimdall IDS Dashboard — EVE JSON Tail
-Background thread that tails /var/log/suricata/eve.json,
-parses alert events, writes them to the database, and
-broadcasts them to connected SSE clients.
+Heimdall IDS Dashboard — EVE JSON Tail (Version 2)
+Background thread that tails eve.json and dispatches all event types:
+  alert, flow, dns, http
 """
 
 import json
@@ -12,73 +11,121 @@ import time
 
 log = logging.getLogger("heimdall.tail")
 
-# Severity mapping: Suricata uses 1 (highest) → 4 (lowest)
 _SEVERITY_MAP = {1: "critical", 2: "high", 3: "medium", 4: "low"}
 
 
-def map_severity(level: int | None) -> str:
+def map_severity(level):
     return _SEVERITY_MAP.get(level, "info")
 
 
-def parse_eve_line(raw: str) -> dict | None:
+def parse_eve_line(raw: str):
     """
-    Parse one line from eve.json.
-    Returns a normalised alert dict if the line is an alert event,
-    otherwise returns None (flows, DNS, stats, etc. are silently skipped).
+    Parse one eve.json line.
+    Returns (event_type, parsed) where event_type is one of:
+      'alert' | 'flow' | 'dns' | 'http' | None
+    parsed is the normalised dict (for alert) or raw evt dict (for others).
     """
     raw = raw.strip()
     if not raw:
-        return None
+        return None, None
     try:
         evt = json.loads(raw)
     except json.JSONDecodeError:
-        return None
+        return None, None
 
-    if evt.get("event_type") != "alert":
-        return None
+    etype = evt.get("event_type")
 
-    alert = evt.get("alert", {})
+    if etype == "alert":
+        a = evt.get("alert", {})
+        return "alert", {
+            "id":       f"{evt.get('flow_id',0)}-{int(time.time()*1000)}",
+            "ts":       evt.get("timestamp", ""),
+            "src_ip":   evt.get("src_ip", ""),
+            "src_port": evt.get("src_port", 0),
+            "dst_ip":   evt.get("dest_ip", ""),
+            "dst_port": evt.get("dest_port", 0),
+            "proto":    evt.get("proto", "TCP").upper(),
+            "iface":    evt.get("in_iface", ""),
+            "flow_id":  evt.get("flow_id", 0),
+            "sig_id":   a.get("signature_id", 0),
+            "sig_msg":  a.get("signature", ""),
+            "category": a.get("category", ""),
+            "severity": map_severity(a.get("severity")),
+            "action":   a.get("action", "allowed"),
+            "raw":      evt,
+        }
+
+    if etype == "flow":
+        return "flow", evt
+
+    if etype == "dns":
+        return "dns", evt
+
+    if etype == "http":
+        return "http", evt
+
+    return None, None
+
+
+def _flow_summary(evt: dict) -> dict:
+    """Compact flow dict for SSE broadcast (avoids sending huge raw eve blobs)."""
+    f = evt.get("flow", {})
     return {
-        # Unique ID: flow_id + millisecond timestamp avoids collisions
-        "id":       f"{evt.get('flow_id', 0)}-{int(time.time() * 1000)}",
+        "flow_id":        evt.get("flow_id", 0),
+        "ts":             evt.get("timestamp", ""),
+        "src_ip":         evt.get("src_ip", ""),
+        "src_port":       evt.get("src_port", 0),
+        "dst_ip":         evt.get("dest_ip", ""),
+        "dst_port":       evt.get("dest_port", 0),
+        "proto":          evt.get("proto", "").upper(),
+        "app_proto":      evt.get("app_proto", ""),
+        "state":          f.get("state", ""),
+        "reason":         f.get("reason", ""),
+        "pkts_toserver":  f.get("pkts_toserver", 0),
+        "pkts_toclient":  f.get("pkts_toclient", 0),
+        "bytes_toserver": f.get("bytes_toserver", 0),
+        "bytes_toclient": f.get("bytes_toclient", 0),
+        "alerted":        bool(f.get("alerted")),
+    }
+
+
+def _dns_summary(evt: dict) -> dict:
+    d = evt.get("dns", {})
+    return {
         "ts":       evt.get("timestamp", ""),
         "src_ip":   evt.get("src_ip", ""),
-        "src_port": evt.get("src_port", 0),
         "dst_ip":   evt.get("dest_ip", ""),
-        "dst_port": evt.get("dest_port", 0),
-        "proto":    evt.get("proto", "TCP").upper(),
-        "iface":    evt.get("in_iface", ""),
         "flow_id":  evt.get("flow_id", 0),
-        "sig_id":   alert.get("signature_id", 0),
-        "sig_msg":  alert.get("signature", ""),
-        "category": alert.get("category", ""),
-        "severity": map_severity(alert.get("severity")),
-        "action":   alert.get("action", "allowed"),
-        "raw":      evt,
+        "dns_type": d.get("type", ""),
+        "rrname":   d.get("rrname", ""),
+        "rrtype":   d.get("rrtype", ""),
+        "rcode":    d.get("rcode", ""),
+        "ttl":      d.get("ttl", 0),
+    }
+
+
+def _http_summary(evt: dict) -> dict:
+    h = evt.get("http", {})
+    return {
+        "ts":         evt.get("timestamp", ""),
+        "src_ip":     evt.get("src_ip", ""),
+        "dst_ip":     evt.get("dest_ip", ""),
+        "flow_id":    evt.get("flow_id", 0),
+        "hostname":   h.get("hostname", ""),
+        "url":        h.get("url", ""),
+        "method":     h.get("http_method", ""),
+        "status":     h.get("status", 0),
+        "user_agent": h.get("http_user_agent", ""),
     }
 
 
 def tail_thread(path: str, db, registry, wdb=None):
     """
     Runs forever in a daemon thread.
-
-    Behaviour:
-    - On startup: seeks to the end of the file so existing history is
-      not re-broadcast (it is served via GET /alerts instead).
-    - Poll interval: 100 ms when idle — keeps CPU usage negligible.
-    - Log rotation: if the file shrinks, the position is rewound to 0
-      so the new file is tailed from the beginning.
-    - Missing file: retries every 3 seconds with a warning.
-
-    Args:
-        path:     Absolute path to eve.json.
-        db:       AlertDB instance — receives insert() calls.
-        registry: Registry instance — receives broadcast() calls.
-        wdb:      WebhookDB instance — optional, dispatches webhook notifications.
+    Tails eve.json, persists each event, and broadcasts SSE summaries.
     """
     log.info("Tailing %s", path)
 
-    # Seek to end on first open — skip history that's already in the DB
     pos = 0
     try:
         pos = os.path.getsize(path)
@@ -93,21 +140,34 @@ def tail_thread(path: str, db, registry, wdb=None):
                 while True:
                     line = f.readline()
                     if line:
-                        alert = parse_eve_line(line)
-                        if alert:
-                            db.insert(alert)
-                            registry.broadcast(alert)
+                        etype, parsed = parse_eve_line(line)
+
+                        if etype == "alert":
+                            db.insert(parsed)
+                            registry.broadcast("alert", parsed)
                             if wdb is not None:
                                 from webhooks import dispatch
-                                dispatch(alert, wdb)
+                                dispatch(parsed, wdb)
+
+                        elif etype == "flow":
+                            db.insert_flow(parsed)
+                            registry.broadcast("flow", _flow_summary(parsed))
+
+                        elif etype == "dns":
+                            db.insert_dns(parsed)
+                            registry.broadcast("dns", _dns_summary(parsed))
+
+                        elif etype == "http":
+                            db.insert_http(parsed)
+                            registry.broadcast("http", _http_summary(parsed))
+
                         pos = f.tell()
                     else:
-                        # No new data — check for log rotation
                         try:
                             if os.path.getsize(path) < pos:
                                 log.info("Log rotation detected — rewinding.")
                                 pos = 0
-                                break   # reopen the (new) file
+                                break
                         except OSError:
                             pass
                         time.sleep(0.1)
@@ -117,10 +177,6 @@ def tail_thread(path: str, db, registry, wdb=None):
 
 
 def purge_thread(db, auth):
-    """
-    Runs forever in a daemon thread.
-    Purges old alerts and expired sessions once per hour.
-    """
     from config import PURGE_EVERY
     while True:
         time.sleep(PURGE_EVERY)

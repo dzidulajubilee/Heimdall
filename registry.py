@@ -49,12 +49,13 @@ class Registry:
 
     # ── Broadcast ─────────────────────────────────────────────────────────────
 
-    def broadcast(self, payload: dict):
+    def broadcast(self, event_type: str, payload: dict):
         """
-        Serialize `payload` as an SSE 'alert' event and enqueue it for
+        Serialize `payload` as an SSE event and enqueue it for
         every connected client.  Clients whose queues are full are dropped.
+        event_type: 'alert' | 'flow' | 'dns' | 'http' | 'ping'
         """
-        msg = f"event: alert\ndata: {json.dumps(payload)}\n\n"
+        msg = f"event: {event_type}\ndata: {json.dumps(payload)}\n\n"
         with self._lock:
             dead = []
             for cid, q in self._clients.items():

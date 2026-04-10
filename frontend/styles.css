@@ -154,7 +154,7 @@
 /* ── Metrics bar ── */
 .metrics {
   display: grid;
-  grid-template-columns: repeat(6, 1fr);
+  grid-template-columns: repeat(8, 1fr);
   gap: 1px;
   background: var(--border);
   border-bottom: 1px solid var(--border);
@@ -306,3 +306,23 @@ td {
   from { opacity: 0; transform: translateY(8px); }
   to   { opacity: 1; transform: translateY(0); }
 }
+
+/* ── Webhook form inputs ── */
+.wh-input {
+  width: 100%;
+  padding: 8px 10px;
+  background: var(--bg2);
+  border: 1px solid var(--border2);
+  border-radius: var(--radius-sm);
+  color: var(--text1);
+  font-size: 12px;
+  font-family: var(--sans);
+  outline: none;
+  transition: border-color .2s;
+}
+.wh-input:focus { border-color: var(--accent); }
+select.wh-input { cursor: pointer; }
+
+.status-ok   { color: var(--green); }
+.status-redir { color: var(--yellow); }
+.status-err   { color: var(--red); }
