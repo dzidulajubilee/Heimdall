@@ -1,17 +1,22 @@
 /**
- * Heimdall IDS Dashboard — Main React Application
+ * Heimdall IDS Dashboard — Main React Application (Version 2)
  * Loaded by index.html via <script type="text/babel" src="/frontend/app.jsx">
  *
- * External deps (loaded before this file in index.html):
- *   - React 18  (window.React)
- *   - ReactDOM  (window.ReactDOM)
- *   - Babel standalone (transpiles JSX in the browser)
- *   - themes.js (provides THEMES and ThemePicker)
+ * Load order in index.html:
+ *   1. react.production.min.js   — window.React
+ *   2. react-dom.production.min.js — window.ReactDOM
+ *   3. babel.min.js              — Babel standalone transpiler
+ *   4. styles.css                — all component CSS
+ *   5. themes.js                 — THEMES array + ThemePicker (plain script, global)
+ *   6. app.jsx (this file)       — full application, compiled by Babel
  *
- * This file must be self-contained: no ES module imports.
+ * Views: Alerts | Flow Events | DNS Queries | Webhooks
  */
 
-/* global React, ReactDOM, ThemePicker */
+/* global React, ReactDOM, ThemePicker, THEMES */
+
+// ── Main App ──
+
 const { useState, useEffect, useRef } = React;
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -1440,4 +1445,3 @@ function App() {
 
 // ── Mount ─────────────────────────────────────────────────────────────────────
 ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
-

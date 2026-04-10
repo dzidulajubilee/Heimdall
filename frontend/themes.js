@@ -1,7 +1,11 @@
 /**
- * Heimdall — Theme system
- * Defines all available themes and exports the ThemePicker component.
+ * Heimdall IDS Dashboard — Theme System
+ * Defines all available themes and the ThemePicker component.
+ * Loaded by index.html as a plain <script> before app.jsx.
+ * ThemePicker is used as a global by app.jsx (Babel compiles both in sequence).
  */
+
+// ── Themes ──
 
 const THEMES = [
   { id: 'night',     label: 'Night',          accent: '#4f9cf9', dot: '#0f1117' },
