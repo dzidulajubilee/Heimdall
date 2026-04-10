@@ -155,6 +155,13 @@ class AlertDB:
             (cutoff, limit)).fetchall()
         return [dict(r) for r in rows]
 
+    def clear_flows(self) -> int:
+        """Delete all flow events. Returns number of rows deleted."""
+        cur = self._conn().execute("DELETE FROM flows")
+        self._conn().commit()
+        log.info("Flows cleared — %d rows deleted.", cur.rowcount)
+        return cur.rowcount
+
     # ── DNS ───────────────────────────────────────────────────────────────────
 
     def insert_dns(self, evt: dict):

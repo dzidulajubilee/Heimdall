@@ -35,6 +35,7 @@ class Handler(BaseHTTPRequestHandler):
     GET  /dns           → JSON DNS events (requires auth)
     GET  /http          → JSON HTTP events (requires auth)
     DELETE /alerts      → wipe database (requires auth)
+    DELETE /flows       → wipe flows table (requires auth)
     GET  /health        → JSON status (requires auth)
     GET  /webhooks      → list all webhooks (requires auth)
     POST /webhooks      → create webhook (requires auth)
@@ -221,6 +222,8 @@ class Handler(BaseHTTPRequestHandler):
         p = urlparse(self.path)
         if p.path == "/alerts":
             self._json({"deleted": self.db.clear_all()})
+        elif p.path == "/flows":
+            self._json({"deleted": self.db.clear_flows()})
         elif p.path.startswith("/webhooks/"):
             try:
                 wid = int(p.path.split("/")[2])

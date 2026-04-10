@@ -474,13 +474,23 @@ function Detail({ alert }) {
 
 
 // ── FlowsView ─────────────────────────────────────────────────────────────────
-function FlowsView({ rows, loading, selected, onSelect }) {
+function FlowsView({ rows, loading, selected, onSelect, onClear }) {
   const [search, setSearch] = useState('');
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
   const q = search.toLowerCase();
   const filtered = rows.filter(r =>
     !q || r.src_ip?.includes(q) || r.dst_ip?.includes(q) ||
     r.proto?.toLowerCase().includes(q) || r.app_proto?.toLowerCase().includes(q)
   );
+
+  const handleClearClick = () => {
+    setShowClearConfirm(true);
+  };
+
+  const handleConfirmClear = () => {
+    setShowClearConfirm(false);
+    onClear && onClear();
+  };
 
   return (
     <div style={{display:'flex',flexDirection:'column',overflow:'hidden',flex:1}}>
@@ -494,6 +504,7 @@ function FlowsView({ rows, loading, selected, onSelect }) {
             </svg>
             <input placeholder="Filter flows…" value={search} onChange={e=>setSearch(e.target.value)}/>
           </div>
+          <button className="btn" onClick={handleClearClick}>Clear</button>
         </div>
       </div>
       <div className="tscroll">
@@ -539,6 +550,45 @@ function FlowsView({ rows, loading, selected, onSelect }) {
           </table>
         )}
       </div>
+      {showClearConfirm && (
+        <div className="modal-bg" onClick={() => setShowClearConfirm(false)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div style={{ fontSize: 15, fontWeight: 500, marginBottom: 10 }}>
+              Clear all flow events?
+            </div>
+            <div style={{
+              fontSize: 12, color: 'var(--text2)',
+              lineHeight: 1.7, marginBottom: 24,
+            }}>
+              This will permanently delete{' '}
+              <b style={{ color: 'var(--text1)' }}>
+                {rows.length.toLocaleString()} stored flows
+              </b>{' '}
+              from the database. This action cannot be undone.
+            </div>
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+              <button className="btn"
+                      onClick={() => setShowClearConfirm(false)}
+                      style={{ minWidth: 80 }}>
+                Cancel
+              </button>
+              <button onClick={handleConfirmClear}
+                      style={{
+                        minWidth: 80, padding: '4px 14px',
+                        borderRadius: 'var(--radius-sm)',
+                        border: '1px solid var(--red)',
+                        background: 'var(--red-d)',
+                        color: 'var(--red)', fontSize: 11,
+                        fontFamily: 'var(--sans)',
+                        cursor: 'pointer',
+                        transition: 'all .15s',
+                      }}>
+                Yes, delete all
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1371,8 +1421,8 @@ function App() {
     return () => clearInterval(id);
   }, []);
 
-  // ── Clear handler ──────────────────────────────────────────────────────────
-  async function handleClear() {
+  // ── Clear handlers ──────────────────────────────────────────────────────────
+  async function handleClearAlerts() {
     setClearing(true);
     try { await fetch('/alerts', { method: 'DELETE' }); } catch {}
     setAlerts([]);
@@ -1381,6 +1431,16 @@ function App() {
     setClearing(false);
     setShowConfirm(false);
   }
+
+  const handleClearFlows = async () => {
+    try {
+      await fetch('/flows', { method: 'DELETE' });
+      setFlows([]);
+      setFlowSel(null);
+    } catch (e) {
+      alert('Failed to clear flows');
+    }
+  };
 
   // ── Derived state ──────────────────────────────────────────────────────────
   const counts = { critical: 0, high: 0, medium: 0, low: 0, info: 0 };
@@ -1563,49 +1623,58 @@ function App() {
         {activeView === 'alerts' && <div className="divider"/>}
 
         {activeView === 'alerts' && <div className="s-label">Top Sources</div>}
-        {activeView === 'alerts' && topSrcs.map(([ip, cnt]) => (
-          <div key={ip} className="src-row">
-            <span className="src-ip">{ip}</span>
-            <span className="src-cnt">{cnt}</span>
-          </div>
-        ))}
         {activeView === 'alerts' && topSrcs.length === 0 && (
           <div style={{
             padding: '4px 18px', fontSize: 11,
             color: 'var(--text3)', fontFamily: 'var(--mono)',
           }}>no data yet</div>
         )}
+        {activeView === 'alerts' && topSrcs.length > 0 && (
+          <div style={{padding:'0 12px'}}>
+            {topSrcs.map(([ip, cnt]) => {
+              const maxCount = topSrcs[0][1];
+              const percent = (cnt / maxCount) * 100;
+              return (
+                <div key={ip} style={{marginBottom:8}}>
+                  <div style={{display:'flex',justifyContent:'space-between',fontSize:11,marginBottom:2}}>
+                    <span className="src-ip" style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',maxWidth:100}}>{ip}</span>
+                    <span className="src-cnt">{cnt}</span>
+                  </div>
+                  <div style={{height:4,background:'var(--bg3)',borderRadius:2,overflow:'hidden'}}>
+                    <div style={{width:`${percent}%`,height:'100%',background:'var(--accent)',borderRadius:2}}/>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </aside>
 
       {/* ── Main ── */}
       <main className="main" style={{display: activeView === 'alerts' ? '' : 'none'}}>
 
-        {/* Metrics */}
-        <div className="metrics">
-          {[
-            { label: 'Total Alerts',    val: alerts.length, color: '' },
-            { label: 'Critical',        val: counts.critical, color: 'var(--red)' },
-            { label: 'High',            val: counts.high,     color: 'var(--orange)' },
-            { label: 'Medium',          val: counts.medium,   color: 'var(--yellow)' },
-            { label: 'Unique Sources',  val: uniqueSrcs,      color: '' },
-            { label: 'Top Category',    val: topCat.name,     color: '',
-              sub: topCat.count ? `${topCat.count} alerts` : '' },
-            { label: 'Flows',           val: flows.length,    color: 'var(--teal)' },
-            { label: 'DNS / HTTP',      val: `${dnsEvents.length} / ${httpEvents.length}`, color: 'var(--purple)', small: true },
-          ].map(m => (
-            <div key={m.label} className="metric">
-              <div className="metric-label">{m.label}</div>
-              <div className="metric-val"
-                   style={{
-                     color: m.color || undefined,
-                     fontSize: (m.label === 'Top Category' || m.small) ? 14 : undefined,
-                     paddingTop: (m.label === 'Top Category' || m.small) ? 4 : undefined,
-                   }}>
-                {m.val}
-              </div>
-              {m.sub && <div className="metric-sub">{m.sub}</div>}
-            </div>
-          ))}
+        {/* Metrics — 5 columns only */}
+        <div className="metrics" style={{gridTemplateColumns: 'repeat(5,1fr)'}}>
+          <div className="metric">
+            <div className="metric-label">Total Alerts</div>
+            <div className="metric-val">{alerts.length.toLocaleString()}</div>
+          </div>
+          <div className="metric">
+            <div className="metric-label">Critical</div>
+            <div className="metric-val" style={{color:'var(--red)'}}>{counts.critical}</div>
+          </div>
+          <div className="metric">
+            <div className="metric-label">High</div>
+            <div className="metric-val" style={{color:'var(--orange)'}}>{counts.high}</div>
+          </div>
+          <div className="metric">
+            <div className="metric-label">Medium</div>
+            <div className="metric-val" style={{color:'var(--yellow)'}}>{counts.medium}</div>
+          </div>
+          <div className="metric">
+            <div className="metric-label">Unique Sources</div>
+            <div className="metric-val">{uniqueSrcs}</div>
+          </div>
         </div>
 
         {/* Content area */}
@@ -1723,7 +1792,7 @@ function App() {
       {activeView === 'flows' && (
         <main className="main">
           <div className="content" style={{gridTemplateColumns:'1fr 310px'}}>
-            <FlowsView rows={flows} loading={evtLoading} selected={flowSel} onSelect={setFlowSel}/>
+            <FlowsView rows={flows} loading={evtLoading} selected={flowSel} onSelect={setFlowSel} onClear={handleClearFlows}/>
             <div className="detail">
               <div className="pane-head"><span className="pane-title">Flow Detail</span></div>
               <FlowDetail item={flowSel}/>
@@ -1793,7 +1862,7 @@ function App() {
                       style={{ minWidth: 80 }}>
                 Cancel
               </button>
-              <button onClick={handleClear}
+              <button onClick={handleClearAlerts}
                       disabled={clearing}
                       style={{
                         minWidth: 80, padding: '4px 14px',
