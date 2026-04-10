@@ -1,4 +1,12 @@
 /**
+ * Heimdall — Theme definitions (SOURCE REFERENCE ONLY)
+ * This file is NOT loaded by index.html.
+ * Its content is inlined at the top of app.jsx.
+ * Edit here, then copy the changes into app.jsx.
+ */
+
+
+/**
  * Heimdall IDS Dashboard — Theme System
  * Defines all available themes and the ThemePicker component.
  * Loaded by index.html as a plain <script> before app.jsx.
