@@ -224,7 +224,24 @@ body {
 </head>
 <body>
 <div id="root"></div>
-<script src="/frontend/themes.js"></script>
-<script type="text/babel" src="/frontend/app.jsx"></script>
+<script id="themes-src" type="text/babel-source" src="/frontend/themes.js"></script>
+<script id="app-src"    type="text/babel-source" src="/frontend/app.jsx"></script>
+<script>
+// Load themes.js + app.jsx in order through Babel, sharing the same global scope.
+(async () => {
+  const [themesResp, appResp] = await Promise.all([
+    fetch('/frontend/themes.js'),
+    fetch('/frontend/app.jsx'),
+  ]);
+  const themesCode = await themesResp.text();
+  const appCode    = await appResp.text();
+  // Transpile and eval themes first (defines THEMES + ThemePicker globally),
+  // then transpile and eval app (uses ThemePicker).
+  const transformed1 = Babel.transform(themesCode, { presets: ['react'] }).code;
+  eval(transformed1);  // eslint-disable-line no-eval
+  const transformed2 = Babel.transform(appCode,    { presets: ['react'] }).code;
+  eval(transformed2);  // eslint-disable-line no-eval
+})();
+</script>
 </body>
 </html>
