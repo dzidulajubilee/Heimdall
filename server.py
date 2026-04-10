@@ -104,7 +104,7 @@ def main():
     s = db.stats()
     log.info(
         "DB: %d total alerts, %d in last %d days, oldest: %s",
-        s["total"], s["recent"], args.retain_days, s["oldest"] or "none",
+        s["alerts"]["total"], s["alerts"]["recent"], args.retain_days, s["oldest"] or "none",
     )
 
     # ── Background threads ────────────────────────────────────────────────────
