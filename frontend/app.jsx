@@ -939,6 +939,297 @@ function ChartsView() {
   );
 }
 
+// ── SettingsView — User Management (Admin only) ───────────────────────────────
+function UserForm({ initial, onSave, onCancel }) {
+  const editing = !!initial?.id;
+  const [username, setUsername] = useState(initial?.username || '');
+  const [password, setPassword] = useState('');
+  const [role,     setRole]     = useState(initial?.role || 'analyst');
+  const [enabled,  setEnabled]  = useState(initial?.enabled !== false);
+  const [saving,   setSaving]   = useState(false);
+  const [err,      setErr]      = useState('');
+
+  async function save() {
+    if (!username.trim()) { setErr('Username is required'); return; }
+    if (!editing && !password.trim()) { setErr('Password is required'); return; }
+    setSaving(true); setErr('');
+    const body = { username: username.trim(), role, enabled };
+    if (password.trim()) body.password = password.trim();
+    const method   = editing ? 'PUT'  : 'POST';
+    const endpoint = editing ? `/users/${initial.id}` : '/users';
+    try {
+      const r = await fetch(endpoint, {
+        method, headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const d = await r.json();
+      if (!r.ok) { setErr(d.error || 'Save failed'); return; }
+      onSave(d);
+    } catch { setErr('Network error'); }
+    finally  { setSaving(false); }
+  }
+
+  const ROLE_INFO = {
+    admin:   'Full access — all views, clear data, manage users & webhooks',
+    analyst: 'Read-only — all views, no destructive actions',
+    viewer:  'Stream only — alert list, no detail panel or controls',
+  };
+
+  return (
+    <div className="modal-bg" onClick={onCancel}>
+      <div className="modal" style={{width:440,maxWidth:'95vw'}}
+           onClick={e => e.stopPropagation()}>
+        <div style={{fontSize:15,fontWeight:500,marginBottom:20}}>
+          {editing ? `Edit user: ${initial.username}` : 'Create user'}
+        </div>
+
+        <div className="form-row">
+          <label className="form-label">Username</label>
+          <input className="form-input" placeholder="e.g. analyst1"
+                 value={username} onChange={e => setUsername(e.target.value)}
+                 disabled={editing}/>
+        </div>
+
+        <div className="form-row">
+          <label className="form-label">{editing ? 'New Password (leave blank to keep)' : 'Password'}</label>
+          <input className="form-input" type="password"
+                 placeholder={editing ? '(unchanged)' : 'Set a strong password'}
+                 value={password} onChange={e => setPassword(e.target.value)}/>
+        </div>
+
+        <div className="form-row">
+          <label className="form-label">Role</label>
+          <select className="form-input" value={role}
+                  onChange={e => setRole(e.target.value)}>
+            <option value="admin">Admin</option>
+            <option value="analyst">Analyst</option>
+            <option value="viewer">Viewer</option>
+          </select>
+          <span style={{fontSize:11,color:'var(--text3)',marginTop:3}}>
+            {ROLE_INFO[role]}
+          </span>
+        </div>
+
+        {editing && (
+          <div className="form-row">
+            <label className="form-label">Status</label>
+            <label style={{display:'flex',alignItems:'center',gap:8,cursor:'pointer',width:'fit-content'}}>
+              <div className="toggle">
+                <input type="checkbox" checked={enabled}
+                       onChange={e => setEnabled(e.target.checked)}/>
+                <div className="toggle-track"/>
+                <div className="toggle-thumb"/>
+              </div>
+              <span style={{fontSize:12,color:'var(--text2)'}}>
+                {enabled ? 'Active' : 'Disabled'}
+              </span>
+            </label>
+          </div>
+        )}
+
+        {err && <div className="wh-error">{err}</div>}
+
+        <div style={{display:'flex',gap:10,justifyContent:'flex-end',marginTop:20}}>
+          <button className="btn" onClick={onCancel} disabled={saving}
+                  style={{minWidth:80}}>Cancel</button>
+          <button className="btn on" onClick={save} disabled={saving}
+                  style={{minWidth:80}}>{saving ? 'Saving…' : editing ? 'Save' : 'Create'}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SettingsView({ currentUser }) {
+  const [users,    setUsers]    = useState([]);
+  const [loading,  setLoading]  = useState(true);
+  const [showForm, setShowForm] = useState(false);
+  const [editing,  setEditing]  = useState(null);
+  const [delId,    setDelId]    = useState(null);
+
+  useEffect(() => {
+    fetch('/users').then(r => r.json())
+      .then(d => { setUsers(Array.isArray(d) ? d : []); setLoading(false); })
+      .catch(() => setLoading(false));
+  }, []);
+
+  function onSaved(user) {
+    setUsers(prev => {
+      const idx = prev.findIndex(u => u.id === user.id);
+      return idx >= 0 ? prev.map(u => u.id === user.id ? user : u) : [...prev, user];
+    });
+    setShowForm(false); setEditing(null);
+  }
+
+  async function deleteUser(uid) {
+    await fetch(`/users/${uid}`, { method: 'DELETE' });
+    setUsers(prev => prev.filter(u => u.id !== uid));
+    setDelId(null);
+  }
+
+  const ROLE_COLOR = {
+    admin:   'var(--accent)',
+    analyst: 'var(--green)',
+    viewer:  'var(--text3)',
+  };
+
+  const fmtDate = ts => ts
+    ? new Date(ts * 1000).toLocaleDateString(undefined, { month:'short', day:'numeric', year:'numeric' })
+    : 'Never';
+
+  return (
+    <div style={{display:'flex',flexDirection:'column',overflow:'hidden',flex:1}}>
+      <div className="pane-head">
+        <span className="pane-title">Settings</span>
+        <div className="pane-actions">
+          <button className="btn-add"
+                  onClick={() => { setEditing(null); setShowForm(true); }}>
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"
+                 stroke="currentColor" strokeWidth="2">
+              <line x1="6" y1="1" x2="6" y2="11"/>
+              <line x1="1" y1="6" x2="11" y2="6"/>
+            </svg>
+            Add user
+          </button>
+        </div>
+      </div>
+
+      <div className="wh-panel">
+        <div className="wh-section">
+          <div className="wh-section-title">User Accounts</div>
+
+          {loading && (
+            <div style={{color:'var(--text3)',fontSize:12,
+                         fontFamily:'var(--mono)',padding:'20px 0'}}>Loading…</div>
+          )}
+
+          {!loading && users.map(u => (
+            <div key={u.id} className="wh-card"
+                 style={{opacity: u.enabled ? 1 : 0.55}}>
+              <div className="wh-card-header">
+                <div style={{
+                  width:30,height:30,borderRadius:'50%',
+                  background:`${ROLE_COLOR[u.role]}22`,
+                  border:`1px solid ${ROLE_COLOR[u.role]}44`,
+                  display:'flex',alignItems:'center',justifyContent:'center',
+                  fontFamily:'var(--mono)',fontSize:12,fontWeight:600,
+                  color:ROLE_COLOR[u.role],flexShrink:0,
+                }}>
+                  {u.username[0].toUpperCase()}
+                </div>
+                <div>
+                  <div style={{display:'flex',alignItems:'center',gap:8}}>
+                    <span className="wh-name">{u.username}</span>
+                    {u.username === currentUser && (
+                      <span style={{fontSize:9,fontFamily:'var(--mono)',
+                                    color:'var(--accent)',letterSpacing:'.06em'}}>YOU</span>
+                    )}
+                    {!u.enabled && (
+                      <span style={{fontSize:9,fontFamily:'var(--mono)',
+                                    color:'var(--text3)',letterSpacing:'.06em'}}>DISABLED</span>
+                    )}
+                  </div>
+                  <div style={{fontSize:10,fontFamily:'var(--mono)',
+                               color:ROLE_COLOR[u.role],letterSpacing:'.06em',
+                               textTransform:'uppercase',marginTop:2}}>
+                    {u.role}
+                  </div>
+                </div>
+                <div style={{marginLeft:'auto',fontSize:10,fontFamily:'var(--mono)',
+                              color:'var(--text3)',textAlign:'right'}}>
+                  <div>Created {fmtDate(u.created_at)}</div>
+                  <div>Last login {fmtDate(u.last_login)}</div>
+                </div>
+              </div>
+              <div className="wh-footer">
+                <button className="btn-test"
+                        onClick={() => { setEditing(u); setShowForm(true); }}>
+                  Edit
+                </button>
+                {u.username !== currentUser && (
+                  <button className="btn-danger"
+                          onClick={() => setDelId(u.id)}>
+                    Delete
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="wh-section">
+          <div className="wh-section-title">Role Permissions</div>
+          <div style={{fontSize:12,color:'var(--text2)',lineHeight:1.9}}>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 60px 70px 60px',
+                         gap:'0 12px',fontSize:11}}>
+              <div style={{color:'var(--text3)',fontWeight:600,
+                           textTransform:'uppercase',letterSpacing:'.08em',fontSize:9,
+                           paddingBottom:6,borderBottom:'1px solid var(--border)'}}>
+                Permission
+              </div>
+              {['Admin','Analyst','Viewer'].map(r => (
+                <div key={r} style={{color:'var(--text3)',fontWeight:600,
+                                     textTransform:'uppercase',letterSpacing:'.08em',
+                                     fontSize:9,paddingBottom:6,
+                                     borderBottom:'1px solid var(--border)',
+                                     textAlign:'center'}}>{r}</div>
+              ))}
+              {[
+                ['View alerts / flows / DNS / charts', true,  true,  true],
+                ['Alert detail panel',                 true,  true,  false],
+                ['Search & severity filter',           true,  true,  false],
+                ['Pause / Resume stream',              true,  true,  false],
+                ['Clear alerts / flows',               true,  false, false],
+                ['Webhook notifications',              true,  false, false],
+                ['User management',                    true,  false, false],
+              ].map(([label, a, b, c]) => (
+                [
+                  <div key={label} style={{color:'var(--text2)',padding:'5px 0',
+                                            borderBottom:'1px solid var(--border)'}}>{label}</div>,
+                  ...[a,b,c].map((ok,i) => (
+                    <div key={i} style={{textAlign:'center',padding:'5px 0',
+                                         borderBottom:'1px solid var(--border)',
+                                         color: ok ? 'var(--green)' : 'var(--red)',fontSize:13}}>
+                      {ok ? '✓' : '✗'}
+                    </div>
+                  ))
+                ]
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {showForm && (
+        <UserForm
+          initial={editing}
+          onSave={onSaved}
+          onCancel={() => { setShowForm(false); setEditing(null); }}
+        />
+      )}
+
+      {delId !== null && (
+        <div className="modal-bg" onClick={() => setDelId(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <div style={{fontSize:15,fontWeight:500,marginBottom:10}}>Delete user?</div>
+            <div style={{fontSize:12,color:'var(--text2)',marginBottom:24,lineHeight:1.7}}>
+              This user will be permanently removed and immediately logged out.
+            </div>
+            <div style={{display:'flex',gap:10,justifyContent:'flex-end'}}>
+              <button className="btn" onClick={() => setDelId(null)}
+                      style={{minWidth:80}}>Cancel</button>
+              <button className="btn-danger" onClick={() => deleteUser(delId)}
+                      style={{padding:'4px 14px',borderRadius:'var(--radius-sm)'}}>
+                Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── WebhooksView component ────────────────────────────────────────────────────
 const SEV_OPTIONS = ['critical', 'high', 'medium', 'low', 'info'];
 const SEV_COLORS_WH = {
@@ -1349,6 +1640,8 @@ function App() {
   const [evtLoading,   setEvtLoading]   = useState(false);
   const [chartData,    setChartData]    = useState(null);
   const [chartLoading, setChartLoading] = useState(false);
+  const [currentUser,  setCurrentUser]  = useState('');
+  const [role,         setRole]         = useState('admin');
 
   const pausedRef   = useRef(false);
   const accumRef    = useRef(0);
@@ -1369,6 +1662,14 @@ function App() {
       .catch(() => {});
   };
   useEffect(() => { fetchWebhooks(); }, []);
+
+  // ── Fetch current user + role ─────────────────────────────────────────────
+  useEffect(() => {
+    fetch('/me').then(r => r.json()).then(d => {
+      setCurrentUser(d.username || '');
+      setRole(d.role || 'admin');
+    }).catch(() => {});
+  }, []);
 
   // ── Load history ───────────────────────────────────────────────────────────
   useEffect(() => {
@@ -1602,6 +1903,13 @@ function App() {
         <div className="pill">Engine:
           <b style={{ marginLeft: 4, color: 'var(--green)' }}>Running</b>
         </div>
+        {role !== 'admin' && (
+          <div className="pill" style={{borderColor:'var(--yellow)',background:'var(--yellow-d)'}}>
+            <span style={{color:'var(--yellow)',fontWeight:500,letterSpacing:'.04em'}}>
+              {role.toUpperCase()}
+            </span>
+          </div>
+        )}
         <div className="right">
           <div className="pill">Alerts/s: <b style={{ marginLeft: 4 }}>{rate}</b></div>
           <Clock/>
@@ -1665,6 +1973,7 @@ function App() {
           Charts
         </div>
 
+        {role === 'admin' && (
         <div className={`nav-item${activeView === 'webhooks' ? ' active' : ''}`}
              onClick={() => { setActiveView('webhooks'); fetchWebhooks(); }}>
           <svg width="14" height="14" viewBox="0 0 16 16"
@@ -1681,6 +1990,19 @@ function App() {
             {webhooks.filter(w => w.enabled).length}
           </span>
         </div>
+        )}
+
+        {role === 'admin' && (
+          <div className={`nav-item${activeView === 'settings' ? ' active' : ''}`}
+               onClick={() => setActiveView('settings')}>
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"
+                 stroke="currentColor" strokeWidth="1.5">
+              <circle cx="8" cy="8" r="2.5"/>
+              <path d="M8 1v2M8 13v2M1 8h2M13 8h2M3.05 3.05l1.41 1.41M11.54 11.54l1.41 1.41M3.05 12.95l1.41-1.41M11.54 4.46l1.41-1.41"/>
+            </svg>
+            Settings
+          </div>
+        )}
 
         {activeView === 'alerts' && <div className="divider"/>}
 
@@ -1783,14 +2105,18 @@ function App() {
                          value={search}
                          onChange={e => setSearch(e.target.value)}/>
                 </div>
-                <button className={`btn${paused ? '' : ' on'}`}
-                        onClick={() => setPaused(p => !p)}>
-                  {paused ? 'Resume' : 'Pause'}
-                </button>
-                <button className="btn"
-                        onClick={() => setShowConfirm(true)}>
-                  Clear
-                </button>
+                {(role === 'admin' || role === 'analyst') && (
+                  <button className={`btn${paused ? '' : ' on'}`}
+                          onClick={() => setPaused(p => !p)}>
+                    {paused ? 'Resume' : 'Pause'}
+                  </button>
+                )}
+                {role === 'admin' && (
+                  <button className="btn"
+                          onClick={() => setShowConfirm(true)}>
+                    Clear
+                  </button>
+                )}
               </div>
             </div>
 
@@ -1856,7 +2182,13 @@ function App() {
             <div className="pane-head">
               <span className="pane-title">Event Detail</span>
             </div>
-            <Detail alert={selected}/>
+            {role === 'viewer'
+              ? <div className="dscroll"><div className="empty" style={{height:'100%'}}>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                  <div>Viewer access</div>
+                  <div style={{fontSize:10}}>Detail panel not available</div>
+                </div></div>
+              : <Detail alert={selected}/>}
             <Sparkline data={sparkData}/>
             <Timeline alerts={alerts}/>
           </div>
@@ -1891,6 +2223,11 @@ function App() {
 
       {/* ── Charts view ── */}
       {activeView === 'charts' && <ChartsView/>}
+
+      {/* ── Settings view ── */}
+      {activeView === 'settings' && role === 'admin' && (
+        <SettingsView currentUser={currentUser}/>
+      )}
 
       {/* ── Webhooks view ── */}
       {activeView === 'webhooks' && (

@@ -1,7 +1,7 @@
 """
-Heimdall IDS Dashboard — Authentication
-PBKDF2-SHA256 password hashing + session token management.
-Everything is stored in the same SQLite database as alerts.
+Heimdall IDS Dashboard — Authentication (RBAC-aware)
+Single-password emergency fallback + full user/session management.
+Sessions now carry username and role, checked on every protected request.
 """
 
 import hashlib
@@ -17,18 +17,18 @@ log = logging.getLogger("heimdall.auth")
 
 class AuthManager:
     """
-    Stores a single hashed password and active session tokens in SQLite.
+    Manages the legacy single-password (emergency fallback) and the
+    RBAC session table.
 
-    Password storage:  PBKDF2-SHA256, 260k rounds, random 16-byte salt.
-    Session tokens:    64-char hex, stored with expiry timestamp.
-    Brute-force guard: 1-second delay on every failed login attempt.
+    Session tokens now store username + role so the handler can enforce
+    per-role permissions without a DB lookup on every request.
+
+    Migration:
+      Old sessions (no username/role columns) are invalidated on startup
+      so everyone re-authenticates with username + password.
     """
 
     def __init__(self, conn_fn):
-        """
-        conn_fn: callable that returns a thread-local sqlite3.Connection.
-        Shares the AlertDB connection so auth tables live in the same file.
-        """
         self._conn = conn_fn
         self._setup()
 
@@ -46,26 +46,32 @@ class AuthManager:
             CREATE TABLE IF NOT EXISTS sessions (
                 token      TEXT PRIMARY KEY,
                 created_at REAL NOT NULL,
-                expires_at REAL NOT NULL
+                expires_at REAL NOT NULL,
+                username   TEXT NOT NULL DEFAULT '',
+                role       TEXT NOT NULL DEFAULT 'admin'
             )
         """)
+        # If upgrading: add columns to existing sessions table
+        cols = {r[1] for r in c.execute("PRAGMA table_info(sessions)").fetchall()}
+        if "username" not in cols:
+            c.execute("ALTER TABLE sessions ADD COLUMN username TEXT DEFAULT ''")
+        if "role" not in cols:
+            c.execute("ALTER TABLE sessions ADD COLUMN role TEXT DEFAULT 'admin'")
         c.commit()
 
-    # ── Password ──────────────────────────────────────────────────────────────
+    # ── Single-password (legacy / emergency fallback) ─────────────────────────
 
     def _hash(self, password: str) -> str:
-        """Return 'salt$hash' string suitable for storage."""
         salt = secrets.token_hex(16)
-        h = hashlib.pbkdf2_hmac(
+        h    = hashlib.pbkdf2_hmac(
             "sha256", password.encode(), salt.encode(), PBKDF2_ITERS
         )
         return f"{salt}${h.hex()}"
 
     def _verify(self, password: str, stored: str) -> bool:
-        """Constant-time comparison of password against stored hash."""
         try:
             salt, h = stored.split("$", 1)
-            check = hashlib.pbkdf2_hmac(
+            check   = hashlib.pbkdf2_hmac(
                 "sha256", password.encode(), salt.encode(), PBKDF2_ITERS
             )
             return hmac.compare_digest(check.hex(), h)
@@ -73,67 +79,82 @@ class AuthManager:
             return False
 
     def set_password(self, password: str):
-        """Hash and persist a new password. Replaces any existing one."""
         c = self._conn()
         c.execute(
             "INSERT OR REPLACE INTO auth (key, value) VALUES ('pw_hash', ?)",
             (self._hash(password),),
         )
         c.commit()
-        log.info("Password updated.")
+        log.info("Single-password updated.")
 
     def get_hash(self) -> str | None:
-        """Return the stored hash string, or None if no password set yet."""
         row = self._conn().execute(
             "SELECT value FROM auth WHERE key = 'pw_hash'"
         ).fetchone()
         return row[0] if row else None
 
     def check_password(self, password: str) -> bool:
-        """Return True if password matches stored hash."""
+        """Emergency fallback: checks against single stored password."""
         stored = self.get_hash()
         return bool(stored and self._verify(password, stored))
 
     # ── Sessions ──────────────────────────────────────────────────────────────
 
-    def create_session(self) -> str:
-        """Create a new session token, persist it, and return the token."""
+    def create_session(self, username: str = "", role: str = "admin") -> str:
+        """Create a session token carrying username and role."""
         token = secrets.token_hex(32)
         now   = time.time()
-        c = self._conn()
+        c     = self._conn()
         c.execute(
-            "INSERT INTO sessions (token, created_at, expires_at) VALUES (?, ?, ?)",
-            (token, now, now + SESSION_TTL),
+            """INSERT INTO sessions
+               (token, created_at, expires_at, username, role)
+               VALUES (?, ?, ?, ?, ?)""",
+            (token, now, now + SESSION_TTL, username, role),
         )
         c.commit()
         return token
 
     def validate_session(self, token: str) -> bool:
         """Return True if token exists and has not expired."""
+        return self.get_session(token) is not None
+
+    def get_session(self, token: str) -> dict | None:
+        """
+        Return session dict {token, username, role} if valid,
+        or None if missing/expired.
+        """
         if not token:
-            return False
+            return None
         row = self._conn().execute(
-            "SELECT expires_at FROM sessions WHERE token = ?", (token,)
+            "SELECT token, expires_at, username, role "
+            "FROM sessions WHERE token = ?",
+            (token,),
         ).fetchone()
         if not row:
-            return False
-        if time.time() > row[0]:
+            return None
+        if time.time() > row["expires_at"]:
             self._conn().execute(
                 "DELETE FROM sessions WHERE token = ?", (token,)
             )
             self._conn().commit()
-            return False
-        return True
+            return None
+        return {"token": row["token"], "username": row["username"],
+                "role": row["role"]}
 
     def revoke_session(self, token: str):
-        """Immediately invalidate a session token (logout)."""
         self._conn().execute(
             "DELETE FROM sessions WHERE token = ?", (token,)
         )
         self._conn().commit()
 
+    def revoke_all_sessions(self):
+        """Invalidate every active session — called when RBAC is first enabled."""
+        cur = self._conn().execute("DELETE FROM sessions")
+        self._conn().commit()
+        if cur.rowcount:
+            log.info("Revoked %d sessions (RBAC migration).", cur.rowcount)
+
     def purge_expired(self):
-        """Delete all expired sessions. Called by the purge background thread."""
         cur = self._conn().execute(
             "DELETE FROM sessions WHERE expires_at < ?", (time.time(),)
         )

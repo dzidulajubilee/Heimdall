@@ -51,6 +51,7 @@ class Handler(BaseHTTPRequestHandler):
     auth     = None
     registry = None
     wdb      = None   # WebhookDB instance
+    um       = None   # UserManager instance
 
     # Suppress Python's default "Server: BaseHTTP/x Python/x" header
     # which triggers Suricata SID 2034635.
@@ -79,23 +80,42 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             return ""
 
+    def _session(self) -> dict | None:
+        """Return the session dict {token, username, role} or None."""
+        return self.auth.get_session(self._token())
+
     def _authed(self) -> bool:
-        return self.auth.validate_session(self._token())
+        return self._session() is not None
+
+    def _role(self) -> str:
+        """Return the role of the current session, or '' if unauthenticated."""
+        s = self._session()
+        return s["role"] if s else ""
+
+    def _require_role(self, *roles: str) -> bool:
+        """
+        Return True if authenticated AND role is in `roles`.
+        Sends 403 Forbidden (not 401) so the frontend can distinguish
+        'not logged in' from 'logged in but not allowed'.
+        """
+        if not self._authed():
+            self._json({"error": "Unauthorized"}, 401)
+            return False
+        if roles and self._role() not in roles:
+            self._json({"error": "Forbidden", "role": self._role()}, 403)
+            return False
+        return True
 
     # Files under /frontend/ that must be publicly accessible
-    # (needed by the login page before any session exists)
     _PUBLIC_FRONTEND = {"/frontend/login.js"}
 
     def _require_auth(self) -> bool:
-        """
-        Return True if the request is authenticated.
-        Otherwise send a 401 (for API/SSE paths) or a 302 redirect to /login,
-        then return False so the caller can return immediately.
-        """
+        """Require any valid session — role not checked here."""
         if self._authed():
             return True
         p = urlparse(self.path).path
-        api_paths = ("/alerts", "/flows", "/dns", "/http", "/events", "/health", "/charts")
+        api_paths = ("/alerts", "/flows", "/dns", "/http", "/events",
+                     "/health", "/charts", "/webhooks", "/users", "/me")
         if p.startswith("/frontend/") and p not in self._PUBLIC_FRONTEND:
             self._json({"error": "Unauthorized"}, 401)
         elif any(p.startswith(x) for x in api_paths):
@@ -176,6 +196,12 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_charts(qs)
         elif p.path == "/webhooks":
             self._json(self.wdb.get_all())
+        elif p.path == "/me":
+            s = self._session()
+            self._json({"username": s["username"], "role": s["role"]})
+        elif p.path == "/users":
+            if not self._require_role("admin"): return
+            self._json(self.um.get_all())
         elif p.path == "/health":
             self._json({
                 "status":  "ok",
@@ -195,7 +221,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if not self._require_auth():
             return
-        if p.path == "/webhooks":
+        if p.path == "/users":
+            self._user_create()
+        elif p.path == "/webhooks":
             self._webhook_create()
         elif p.path.startswith("/webhooks/") and p.path.endswith("/test"):
             try:
@@ -210,7 +238,13 @@ class Handler(BaseHTTPRequestHandler):
         if not self._require_auth():
             return
         p = urlparse(self.path)
-        if p.path.startswith("/webhooks/"):
+        if p.path.startswith("/users/"):
+            try:
+                uid = int(p.path.split("/")[2])
+                self._user_update(uid)
+            except (ValueError, IndexError):
+                self.send_error(400)
+        elif p.path.startswith("/webhooks/"):
             try:
                 wid = int(p.path.split("/")[2])
                 self._webhook_update(wid)
@@ -224,9 +258,17 @@ class Handler(BaseHTTPRequestHandler):
             return
         p = urlparse(self.path)
         if p.path == "/alerts":
+            if not self._require_role("admin"): return
             self._json({"deleted": self.db.clear_all()})
         elif p.path == "/flows":
+            if not self._require_role("admin"): return
             self._json({"deleted": self.db.clear_flows()})
+        elif p.path.startswith("/users/"):
+            try:
+                uid = int(p.path.split("/")[2])
+                self._user_delete(uid)
+            except (ValueError, IndexError):
+                self.send_error(400)
         elif p.path.startswith("/webhooks/"):
             try:
                 wid = int(p.path.split("/")[2])
@@ -271,15 +313,31 @@ class Handler(BaseHTTPRequestHandler):
         try:
             n    = int(self.headers.get("Content-Length", 0))
             body = json.loads(self.rfile.read(n))
-            pw   = body.get("password", "")
+            username = body.get("username", "").strip()
+            pw       = body.get("password", "")
         except Exception:
             self._json({"error": "Bad request"}, 400)
             return
 
-        if self.auth.check_password(pw):
-            token = self.auth.create_session()
-            log.info("Login OK from %s", self.address_string())
-            body_bytes = json.dumps({"ok": True}).encode()
+        # ── Primary: RBAC user login ──────────────────────────────────────────
+        user = self.um.authenticate(username, pw) if username else None
+
+        # ── Fallback: single-password (logs in as admin with username 'admin') ─
+        if user is None and not username and self.auth.check_password(pw):
+            user = {"username": "admin", "role": "admin"}
+
+        # ── Also accept: username='admin', single-password ───────────────────
+        if user is None and username.lower() == "admin" and self.auth.check_password(pw):
+            user = {"username": "admin", "role": "admin"}
+
+        if user:
+            token = self.auth.create_session(
+                username=user["username"], role=user["role"]
+            )
+            log.info("Login OK  user=%s role=%s from %s",
+                     user["username"], user["role"], self.address_string())
+            resp = json.dumps({"ok": True, "role": user["role"],
+                               "username": user["username"]}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header(
@@ -287,13 +345,14 @@ class Handler(BaseHTTPRequestHandler):
                 f"suri_session={token}; Path=/; HttpOnly; "
                 f"SameSite=Strict; Max-Age={SESSION_TTL}",
             )
-            self.send_header("Content-Length", str(len(body_bytes)))
+            self.send_header("Content-Length", str(len(resp)))
             self.end_headers()
-            self.wfile.write(body_bytes)
+            self.wfile.write(resp)
         else:
-            log.warning("Failed login from %s", self.address_string())
-            time.sleep(1)   # slow brute-force attempts
-            self._json({"error": "Invalid password"}, 401)
+            log.warning("Failed login  user=%r from %s",
+                        username or "(no username)", self.address_string())
+            time.sleep(1)
+            self._json({"error": "Invalid username or password"}, 401)
 
     def _logout(self):
         self.auth.revoke_session(self._token())
@@ -420,6 +479,66 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control",  "no-cache")
         self.end_headers()
         self.wfile.write(body)
+
+    def _user_create(self):
+        if not self._require_role("admin"): return
+        try:
+            n    = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(n))
+        except Exception:
+            self._json({"error": "Bad request"}, 400); return
+        username = str(body.get("username", "")).strip()
+        password = str(body.get("password", "")).strip()
+        role     = str(body.get("role", "analyst")).strip()
+        if not username or not password:
+            self._json({"error": "username and password are required"}, 400); return
+        if role not in ("admin", "analyst", "viewer"):
+            self._json({"error": "role must be admin, analyst, or viewer"}, 400); return
+        user = self.um.create(username, password, role)
+        if user is None:
+            self._json({"error": f"Username '{username}' already exists"}, 409); return
+        self._json(user, 201)
+
+    def _user_update(self, uid: int):
+        if not self._require_role("admin"): return
+        user = self.um.get_by_id(uid)
+        if not user:
+            self._json({"error": "Not found"}, 404); return
+        try:
+            n    = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(n))
+        except Exception:
+            self._json({"error": "Bad request"}, 400); return
+        # Password change is a separate field
+        if "password" in body:
+            pw = str(body.pop("password", "")).strip()
+            if pw:
+                self.um.set_password(uid, pw)
+        # Guard: can't demote the last admin
+        if body.get("role") and body["role"] != "admin":
+            if user["role"] == "admin" and self.um.count_admins() <= 1:
+                self._json({"error": "Cannot demote the last admin"}, 400); return
+        if body.get("enabled") is not None:
+            if not body["enabled"] and user["role"] == "admin":
+                if self.um.count_admins() <= 1:
+                    self._json({"error": "Cannot disable the last admin"}, 400); return
+        updated = self.um.update(uid, **{k: v for k, v in body.items()
+                                          if k in ("role", "enabled", "username")})
+        self._json(updated)
+
+    def _user_delete(self, uid: int):
+        if not self._require_role("admin"): return
+        user = self.um.get_by_id(uid)
+        if not user:
+            self._json({"error": "Not found"}, 404); return
+        if user["role"] == "admin" and self.um.count_admins() <= 1:
+            self._json({"error": "Cannot delete the last admin"}, 400); return
+        # Don't let admin delete their own account
+        s = self._session()
+        if s and s["username"].lower() == user["username"].lower():
+            self._json({"error": "Cannot delete your own account"}, 400); return
+        self.um.delete(uid)
+        self._json({"deleted": uid})
 
     def _serve_sse(self):
         """Long-lived SSE response — blocks until client disconnects."""

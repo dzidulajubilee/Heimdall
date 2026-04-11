@@ -159,9 +159,14 @@ input:focus { border-color: rgba(79,156,249,.45); }
     <div class="card-title">Sign in</div>
     <div class="card-sub">Enter your password to access the dashboard</div>
 
+    <label for="un">Username</label>
+    <div class="input-wrap" style="margin-bottom:16px">
+      <input type="text" id="un" placeholder="username" autocomplete="username" autofocus>
+    </div>
+
     <label for="pw">Password</label>
     <div class="input-wrap">
-      <input type="password" id="pw" placeholder="••••••••••••" autofocus>
+      <input type="password" id="pw" placeholder="••••••••••••" autocomplete="current-password">
       <button class="eye" id="eye-btn" type="button" title="Show / hide password">
         <svg width="16" height="16" viewBox="0 0 24 24"
              fill="none" stroke="currentColor" stroke-width="1.5">

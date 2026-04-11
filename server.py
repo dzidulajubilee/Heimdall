@@ -26,6 +26,7 @@ from http.server import HTTPServer
 
 import config
 from auth      import AuthManager
+from users     import UserManager
 from database  import AlertDB
 from handlers  import Handler
 from registry  import Registry
@@ -47,7 +48,7 @@ class ThreadedHTTPServer(socketserver.ThreadingMixIn, HTTPServer):
 
 def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Heimdall IDS Dashboard (v1 — alerts)",
+        description="Heimdall IDS Dashboard",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument("--eve",          default=config.DEFAULT_EVE,
@@ -94,17 +95,31 @@ def main():
     # ── Webhook DB ────────────────────────────────────────────────────────────
     wdb = WebhookDB(conn_fn=db._conn)
 
+    # ── User manager (RBAC) ──────────────────────────────────────────────────
+    um = UserManager(conn_fn=db._conn)
+
+    # Bootstrap: if no users yet, auto-promote existing password to admin
+    um.bootstrap_admin(auth.get_hash() or "")
+
+    # Invalidate all old sessions (they lack username/role) on first RBAC run
+    # Only wipe sessions that have no username set
+    db._conn().execute(
+        "DELETE FROM sessions WHERE username = '' OR username IS NULL"
+    )
+    db._conn().commit()
+
     # ── Wire dependencies into the handler ────────────────────────────────────
     Handler.db       = db
     Handler.auth     = auth
     Handler.registry = registry
     Handler.wdb      = wdb
+    Handler.um       = um
 
     # ── Log DB state ──────────────────────────────────────────────────────────
     s = db.stats()
     log.info(
         "DB: %d total alerts, %d in last %d days, oldest: %s",
-        s["alerts"]["total"], s["alerts"]["recent"], args.retain_days, s["oldest"] or "none",
+        s["total"], s["recent"], args.retain_days, s["oldest"] or "none",
     )
 
     # ── Background threads ────────────────────────────────────────────────────

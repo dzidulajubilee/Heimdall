@@ -1,29 +1,28 @@
 /**
- * Heimdall — Login page logic
+ * Heimdall — Login page logic (RBAC)
  */
 
-const pwInput  = document.getElementById('pw');
-const eyeBtn   = document.getElementById('eye-btn');
+const unInput   = document.getElementById('un');
+const pwInput   = document.getElementById('pw');
+const eyeBtn    = document.getElementById('eye-btn');
 const submitBtn = document.getElementById('submit-btn');
 const errorMsg  = document.getElementById('error-msg');
 
-// Toggle password visibility
 eyeBtn.addEventListener('click', () => {
   pwInput.type = pwInput.type === 'password' ? 'text' : 'password';
 });
 
-// Submit on Enter
-pwInput.addEventListener('keydown', e => {
-  if (e.key === 'Enter') login();
-});
-
+unInput.addEventListener('keydown', e => { if (e.key === 'Enter') pwInput.focus(); });
+pwInput.addEventListener('keydown', e => { if (e.key === 'Enter') login(); });
 submitBtn.addEventListener('click', login);
 
 async function login() {
-  const pw = pwInput.value.trim();
-  if (!pw) { pwInput.focus(); return; }
+  const username = unInput.value.trim();
+  const password = pwInput.value.trim();
+  if (!username) { unInput.focus(); showError('Username is required'); return; }
+  if (!password) { pwInput.focus(); showError('Password is required'); return; }
 
-  submitBtn.disabled   = true;
+  submitBtn.disabled    = true;
   submitBtn.textContent = 'Signing in…';
   errorMsg.style.display = 'none';
 
@@ -31,7 +30,7 @@ async function login() {
     const res  = await fetch('/login', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ password: pw }),
+      body:    JSON.stringify({ username, password }),
     });
     const data = await res.json();
 
@@ -39,8 +38,7 @@ async function login() {
       window.location.href = '/';
       return;
     }
-
-    showError(data.error || 'Invalid password');
+    showError(data.error || 'Invalid username or password');
     pwInput.value = '';
     pwInput.focus();
   } catch {
