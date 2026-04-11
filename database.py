@@ -155,13 +155,6 @@ class AlertDB:
             (cutoff, limit)).fetchall()
         return [dict(r) for r in rows]
 
-    def clear_flows(self) -> int:
-        """Delete all flow events. Returns number of rows deleted."""
-        cur = self._conn().execute("DELETE FROM flows")
-        self._conn().commit()
-        log.info("Flows cleared — %d rows deleted.", cur.rowcount)
-        return cur.rowcount
-
     # ── DNS ───────────────────────────────────────────────────────────────────
 
     def insert_dns(self, evt: dict):
@@ -255,6 +248,108 @@ class AlertDB:
         self._conn().commit()
         log.info("Alerts cleared — %d rows deleted.", cur.rowcount)
         return cur.rowcount
+
+    def clear_flows(self) -> int:
+        """Delete every flow event. Returns count deleted."""
+        cur = self._conn().execute("DELETE FROM flows")
+        self._conn().commit()
+        log.info("Flows cleared — %d rows deleted.", cur.rowcount)
+        return cur.rowcount
+
+
+    # ── Chart data ────────────────────────────────────────────────────────────
+
+    def chart_top_talkers(self, limit: int = 10, days: int = 1) -> list[dict]:
+        """Top source IPs by alert count over the last `days` days."""
+        cutoff = time.time() - days * 86400
+        rows = self._conn().execute(
+            """SELECT src_ip, COUNT(*) as cnt
+               FROM alerts WHERE ts_epoch >= ? AND src_ip != ''
+               GROUP BY src_ip ORDER BY cnt DESC LIMIT ?""",
+            (cutoff, limit)
+        ).fetchall()
+        return [{"ip": r["src_ip"], "count": r["cnt"]} for r in rows]
+
+    def chart_alert_trend(self, hours: int = 24) -> list[dict]:
+        """
+        Alert counts bucketed by hour for the last `hours` hours.
+        Returns a list of {ts, count} dicts ordered oldest → newest.
+        """
+        cutoff = time.time() - hours * 3600
+        rows = self._conn().execute(
+            """SELECT CAST((ts_epoch - ?) / 3600 AS INTEGER) as bucket,
+                      COUNT(*) as cnt
+               FROM alerts WHERE ts_epoch >= ?
+               GROUP BY bucket ORDER BY bucket ASC""",
+            (cutoff, cutoff)
+        ).fetchall()
+        # Build a full array with zeros for empty hours
+        buckets = {r["bucket"]: r["cnt"] for r in rows}
+        result  = []
+        import time as _time
+        now = _time.time()
+        for h in range(hours):
+            offset   = h - hours + 1
+            epoch    = now + offset * 3600
+            ts_label = _time.strftime("%H:%M", _time.localtime(epoch))
+            bucket   = hours - h - 1
+            result.append({
+                "ts":    ts_label,
+                "epoch": int(epoch),
+                "count": buckets.get(hours - h - 1, 0),
+            })
+        return result
+
+    def chart_alert_trend_days(self, days: int = 7) -> list[dict]:
+        """
+        Alert counts bucketed by day for the last `days` days.
+        Returns a list of {ts, count} dicts ordered oldest → newest.
+        """
+        cutoff = time.time() - days * 86400
+        rows = self._conn().execute(
+            """SELECT CAST((ts_epoch - ?) / 86400 AS INTEGER) as bucket,
+                      COUNT(*) as cnt
+               FROM alerts WHERE ts_epoch >= ?
+               GROUP BY bucket ORDER BY bucket ASC""",
+            (cutoff, cutoff)
+        ).fetchall()
+        buckets = {r["bucket"]: r["cnt"] for r in rows}
+        result  = []
+        import time as _time
+        now = _time.time()
+        for d in range(days):
+            offset   = d - days + 1
+            epoch    = now + offset * 86400
+            ts_label = _time.strftime("%b %d", _time.localtime(epoch))
+            result.append({
+                "ts":    ts_label,
+                "epoch": int(epoch),
+                "count": buckets.get(days - d - 1, 0),
+            })
+        return result
+
+    def chart_by_category(self, days: int = 1) -> list[dict]:
+        """Alert counts grouped by category for the last `days` days."""
+        cutoff = time.time() - days * 86400
+        rows = self._conn().execute(
+            """SELECT COALESCE(NULLIF(category,''), 'Uncategorized') as cat,
+                      COUNT(*) as cnt
+               FROM alerts WHERE ts_epoch >= ?
+               GROUP BY cat ORDER BY cnt DESC LIMIT 12""",
+            (cutoff,)
+        ).fetchall()
+        return [{"category": r["cat"], "count": r["cnt"]} for r in rows]
+
+    def chart_by_severity(self, days: int = 1) -> list[dict]:
+        """Alert counts grouped by severity for the last `days` days."""
+        cutoff = time.time() - days * 86400
+        rows = self._conn().execute(
+            """SELECT severity, COUNT(*) as cnt
+               FROM alerts WHERE ts_epoch >= ?
+               GROUP BY severity ORDER BY cnt DESC""",
+            (cutoff,)
+        ).fetchall()
+        return [{"severity": r["severity"], "count": r["cnt"]} for r in rows]
 
     def stats(self) -> dict:
         c      = self._conn()
