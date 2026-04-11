@@ -36,6 +36,7 @@ class Handler(BaseHTTPRequestHandler):
     GET  /http          → JSON HTTP events (requires auth)
     DELETE /alerts      → wipe database (requires auth)
     DELETE /flows       → wipe flows table (requires auth)
+    GET  /charts        → JSON chart data (requires auth)
     GET  /health        → JSON status (requires auth)
     GET  /webhooks      → list all webhooks (requires auth)
     POST /webhooks      → create webhook (requires auth)
@@ -94,7 +95,7 @@ class Handler(BaseHTTPRequestHandler):
         if self._authed():
             return True
         p = urlparse(self.path).path
-        api_paths = ("/alerts", "/flows", "/dns", "/http", "/events", "/health")
+        api_paths = ("/alerts", "/flows", "/dns", "/http", "/events", "/health", "/charts")
         if p.startswith("/frontend/") and p not in self._PUBLIC_FRONTEND:
             self._json({"error": "Unauthorized"}, 401)
         elif any(p.startswith(x) for x in api_paths):
@@ -171,6 +172,8 @@ class Handler(BaseHTTPRequestHandler):
             self._serve_table("dns", qs)
         elif p.path == "/http":
             self._serve_table("http", qs)
+        elif p.path == "/charts":
+            self._serve_charts(qs)
         elif p.path == "/webhooks":
             self._json(self.wdb.get_all())
         elif p.path == "/health":
@@ -395,6 +398,28 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok": False, "error": error})
         else:
             self._json({"ok": True})
+
+    def _serve_charts(self, qs: dict):
+        """Return all chart data in a single JSON response."""
+        days = self._qs_int(qs, "days", 1, 1, 90)
+        trend_window = self._qs_int(qs, "trend", 24, 24, 168)  # hours: 24 or 168 (7d)
+        data = {
+            "top_talkers":  self.db.chart_top_talkers(limit=10, days=days),
+            "trend":        (self.db.chart_alert_trend(hours=trend_window)
+                             if trend_window <= 24
+                             else self.db.chart_alert_trend_days(days=trend_window // 24)),
+            "by_category":  self.db.chart_by_category(days=days),
+            "by_severity":  self.db.chart_by_severity(days=days),
+            "window_hours": trend_window,
+            "window_days":  days,
+        }
+        body = json.dumps(data).encode()
+        self.send_response(200)
+        self.send_header("Content-Type",   "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control",  "no-cache")
+        self.end_headers()
+        self.wfile.write(body)
 
     def _serve_sse(self):
         """Long-lived SSE response — blocks until client disconnects."""
