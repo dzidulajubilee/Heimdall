@@ -1042,6 +1042,7 @@ function UserForm({ initial, onSave, onCancel }) {
 
 function SettingsView({ currentUser, webhooks, whLoading, setWhLoading, onRefreshWebhooks }) {
   const [tab,      setTab]      = useState('users');  // 'users' | 'webhooks'
+  const [triggerNewWh, setTriggerNewWh] = useState(false);
   const [users,    setUsers]    = useState([]);
   const [loading,  setLoading]  = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -1109,7 +1110,7 @@ function SettingsView({ currentUser, webhooks, whLoading, setWhLoading, onRefres
           )}
           {tab === 'webhooks' && (
             <button className="btn-add"
-                    onClick={() => onRefreshWebhooks && onRefreshWebhooks('new')}>
+                    onClick={() => { setTab('webhooks'); setTriggerNewWh(t => !t); }}>
               <svg width="12" height="12" viewBox="0 0 12 12" fill="none"
                    stroke="currentColor" strokeWidth="2">
                 <line x1="6" y1="1" x2="6" y2="11"/>
@@ -1119,7 +1120,7 @@ function SettingsView({ currentUser, webhooks, whLoading, setWhLoading, onRefres
             </button>
           )}
         </div>
-      </div>}
+      </div>
 
       <div className="wh-panel">
         {tab === 'webhooks' && (
@@ -1129,6 +1130,7 @@ function SettingsView({ currentUser, webhooks, whLoading, setWhLoading, onRefres
             setLoading={setWhLoading}
             onRefresh={onRefreshWebhooks}
             embedded={true}
+            triggerNew={triggerNewWh}
           />
         )}
         {tab === 'users' && (<>
@@ -1557,9 +1559,14 @@ function WebhookCard({ wh, onEdit, onDelete, onTest }) {
   );
 }
 
-function WebhooksView({ webhooks, loading, setLoading, onRefresh, embedded = false }) {
+function WebhooksView({ webhooks, loading, setLoading, onRefresh, embedded = false, triggerNew }) {
   const [showForm, setShowForm]   = useState(false);
   const [editing,  setEditing]    = useState(null); // null = new
+
+  // Open the new-webhook form whenever the parent flips triggerNew
+  useEffect(() => {
+    if (triggerNew !== undefined) { setEditing(null); setShowForm(true); }
+  }, [triggerNew]);
 
   async function handleDelete(id) {
     await fetch(`/webhooks/${id}`, { method: 'DELETE' }).catch(() => {});
