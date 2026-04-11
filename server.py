@@ -118,8 +118,9 @@ def main():
     # ── Log DB state ──────────────────────────────────────────────────────────
     s = db.stats()
     log.info(
-        "DB: %d total alerts, %d in last %d days, oldest: %s",
-        s["total"], s["recent"], args.retain_days, s["oldest"] or "none",
+        "DB: alerts=%d  flows=%d  dns=%d  oldest: %s",
+        s["alerts"]["total"], s["flows"]["total"],
+        s["dns"]["total"], s["oldest"] or "none",
     )
 
     # ── Background threads ────────────────────────────────────────────────────
