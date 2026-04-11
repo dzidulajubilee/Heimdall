@@ -274,29 +274,32 @@ class AlertDB:
         """
         Alert counts bucketed by hour for the last `hours` hours.
         Returns a list of {ts, count} dicts ordered oldest → newest.
+
+        The SQL bucket key is CAST((ts_epoch - cutoff) / 3600 AS INTEGER),
+        so bucket 0 = first hour after cutoff (oldest), bucket N-1 = most
+        recent hour.  We iterate h = 0..hours-1 and look up bucket h directly
+        so the data order matches the label order.
         """
-        cutoff = time.time() - hours * 3600
-        rows = self._conn().execute(
-            """SELECT CAST((ts_epoch - ?) / 3600 AS INTEGER) as bucket,
-                      COUNT(*) as cnt
-               FROM alerts WHERE ts_epoch >= ?
-               GROUP BY bucket ORDER BY bucket ASC""",
+        now    = time.time()
+        cutoff = now - hours * 3600
+        rows   = self._conn().execute(
+            """SELECT CAST((ts_epoch - ?) / 3600 AS INTEGER) AS bucket,
+                      COUNT(*) AS cnt
+               FROM   alerts
+               WHERE  ts_epoch >= ?
+               GROUP  BY bucket
+               ORDER  BY bucket ASC""",
             (cutoff, cutoff)
         ).fetchall()
-        # Build a full array with zeros for empty hours
         buckets = {r["bucket"]: r["cnt"] for r in rows}
         result  = []
-        import time as _time
-        now = _time.time()
         for h in range(hours):
-            offset   = h - hours + 1
-            epoch    = now + offset * 3600
-            ts_label = _time.strftime("%H:%M", _time.localtime(epoch))
-            bucket   = hours - h - 1
+            # h=0 → oldest slot (cutoff), h=hours-1 → most recent slot
+            slot_epoch = cutoff + h * 3600
             result.append({
-                "ts":    ts_label,
-                "epoch": int(epoch),
-                "count": buckets.get(hours - h - 1, 0),
+                "ts":    time.strftime("%H:%M", time.localtime(slot_epoch)),
+                "epoch": int(slot_epoch),
+                "count": buckets.get(h, 0),
             })
         return result
 
@@ -305,26 +308,25 @@ class AlertDB:
         Alert counts bucketed by day for the last `days` days.
         Returns a list of {ts, count} dicts ordered oldest → newest.
         """
-        cutoff = time.time() - days * 86400
-        rows = self._conn().execute(
-            """SELECT CAST((ts_epoch - ?) / 86400 AS INTEGER) as bucket,
-                      COUNT(*) as cnt
-               FROM alerts WHERE ts_epoch >= ?
-               GROUP BY bucket ORDER BY bucket ASC""",
+        now    = time.time()
+        cutoff = now - days * 86400
+        rows   = self._conn().execute(
+            """SELECT CAST((ts_epoch - ?) / 86400 AS INTEGER) AS bucket,
+                      COUNT(*) AS cnt
+               FROM   alerts
+               WHERE  ts_epoch >= ?
+               GROUP  BY bucket
+               ORDER  BY bucket ASC""",
             (cutoff, cutoff)
         ).fetchall()
         buckets = {r["bucket"]: r["cnt"] for r in rows}
         result  = []
-        import time as _time
-        now = _time.time()
         for d in range(days):
-            offset   = d - days + 1
-            epoch    = now + offset * 86400
-            ts_label = _time.strftime("%b %d", _time.localtime(epoch))
+            slot_epoch = cutoff + d * 86400
             result.append({
-                "ts":    ts_label,
-                "epoch": int(epoch),
-                "count": buckets.get(days - d - 1, 0),
+                "ts":    time.strftime("%b %d", time.localtime(slot_epoch)),
+                "epoch": int(slot_epoch),
+                "count": buckets.get(d, 0),
             })
         return result
 
