@@ -3,7 +3,7 @@
  * Full application: themes, all views, SSE, state management.
  * Loaded by index.html via <script type="text/babel" src="/frontend/app.jsx">
  *
- * Views: Alerts | Flow Events | DNS Queries | Webhooks
+ * Views: Alerts | Flow Events | DNS Queries | Charts | Settings (Users + Webhooks)
  */
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1040,7 +1040,8 @@ function UserForm({ initial, onSave, onCancel }) {
   );
 }
 
-function SettingsView({ currentUser }) {
+function SettingsView({ currentUser, webhooks, whLoading, setWhLoading, onRefreshWebhooks }) {
+  const [tab,      setTab]      = useState('users');  // 'users' | 'webhooks'
   const [users,    setUsers]    = useState([]);
   const [loading,  setLoading]  = useState(true);
   const [showForm, setShowForm] = useState(false);
@@ -1081,20 +1082,56 @@ function SettingsView({ currentUser }) {
     <div style={{display:'flex',flexDirection:'column',overflow:'hidden',flex:1}}>
       <div className="pane-head">
         <span className="pane-title">Settings</span>
-        <div className="pane-actions">
-          <button className="btn-add"
-                  onClick={() => { setEditing(null); setShowForm(true); }}>
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"
-                 stroke="currentColor" strokeWidth="2">
-              <line x1="6" y1="1" x2="6" y2="11"/>
-              <line x1="1" y1="6" x2="11" y2="6"/>
-            </svg>
-            Add user
-          </button>
+        <div style={{display:'flex',gap:1,background:'var(--bg2)',
+                     border:'1px solid var(--border)',borderRadius:'var(--radius-sm)',
+                     padding:2,marginLeft:10}}>
+          {[{id:'users',label:'Users'},{id:'webhooks',label:'Webhooks'}].map(t => (
+            <button key={t.id} onClick={() => setTab(t.id)} style={{
+              padding:'2px 12px',borderRadius:'var(--radius-sm)',border:'none',
+              background: tab===t.id ? 'var(--accent)' : 'transparent',
+              color:      tab===t.id ? 'white' : 'var(--text3)',
+              fontSize:11,fontFamily:'var(--mono)',cursor:'pointer',
+              transition:'all .15s',
+            }}>{t.label}</button>
+          ))}
         </div>
-      </div>
+        <div className="pane-actions">
+          {tab === 'users' && (
+            <button className="btn-add"
+                    onClick={() => { setEditing(null); setShowForm(true); }}>
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none"
+                   stroke="currentColor" strokeWidth="2">
+                <line x1="6" y1="1" x2="6" y2="11"/>
+                <line x1="1" y1="6" x2="11" y2="6"/>
+              </svg>
+              Add user
+            </button>
+          )}
+          {tab === 'webhooks' && (
+            <button className="btn-add"
+                    onClick={() => onRefreshWebhooks && onRefreshWebhooks('new')}>
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none"
+                   stroke="currentColor" strokeWidth="2">
+                <line x1="6" y1="1" x2="6" y2="11"/>
+                <line x1="1" y1="6" x2="11" y2="6"/>
+              </svg>
+              Add webhook
+            </button>
+          )}
+        </div>
+      </div>}
 
       <div className="wh-panel">
+        {tab === 'webhooks' && (
+          <WebhooksView
+            webhooks={webhooks}
+            loading={whLoading}
+            setLoading={setWhLoading}
+            onRefresh={onRefreshWebhooks}
+            embedded={true}
+          />
+        )}
+        {tab === 'users' && (<>
         <div className="wh-section">
           <div className="wh-section-title">User Accounts</div>
 
@@ -1198,6 +1235,7 @@ function SettingsView({ currentUser }) {
             </div>
           </div>
         </div>
+      </>)}
       </div>
 
       {showForm && (
@@ -1519,7 +1557,7 @@ function WebhookCard({ wh, onEdit, onDelete, onTest }) {
   );
 }
 
-function WebhooksView({ webhooks, loading, setLoading, onRefresh }) {
+function WebhooksView({ webhooks, loading, setLoading, onRefresh, embedded = false }) {
   const [showForm, setShowForm]   = useState(false);
   const [editing,  setEditing]    = useState(null); // null = new
 
@@ -1630,7 +1668,7 @@ function App() {
   const [theme,        setTheme]        = useState(
     () => localStorage.getItem('heimdall-theme') || 'night'
   );
-  const [activeView,   setActiveView]   = useState('alerts'); // 'alerts' | 'webhooks'
+  const [activeView,   setActiveView]   = useState('alerts'); // 'alerts' | 'flows' | 'dns' | 'charts' | 'settings'
   const [webhooks,     setWebhooks]     = useState([]);
   const [whLoading,    setWhLoading]    = useState(false);
   const [flows,        setFlows]        = useState([]);
@@ -1973,24 +2011,7 @@ function App() {
           Charts
         </div>
 
-        {role === 'admin' && (
-        <div className={`nav-item${activeView === 'webhooks' ? ' active' : ''}`}
-             onClick={() => { setActiveView('webhooks'); fetchWebhooks(); }}>
-          <svg width="14" height="14" viewBox="0 0 16 16"
-               fill="none" stroke="currentColor" strokeWidth="1.5">
-            <path d="M2 4h12M2 8h8M2 12h10"/>
-            <circle cx="13" cy="12" r="2" fill="currentColor" stroke="none"/>
-          </svg>
-          Webhooks
-          <span style={{
-            marginLeft:'auto', fontFamily:'var(--mono)', fontSize:10,
-            padding:'1px 6px', borderRadius:10,
-            background:'var(--accent-d)', color:'var(--accent)'
-          }}>
-            {webhooks.filter(w => w.enabled).length}
-          </span>
-        </div>
-        )}
+
 
         {role === 'admin' && (
           <div className={`nav-item${activeView === 'settings' ? ' active' : ''}`}
@@ -2226,18 +2247,16 @@ function App() {
 
       {/* ── Settings view ── */}
       {activeView === 'settings' && role === 'admin' && (
-        <SettingsView currentUser={currentUser}/>
-      )}
-
-      {/* ── Webhooks view ── */}
-      {activeView === 'webhooks' && (
-        <WebhooksView
+        <SettingsView
+          currentUser={currentUser}
           webhooks={webhooks}
-          loading={whLoading}
-          setLoading={setWhLoading}
-          onRefresh={fetchWebhooks}
+          whLoading={whLoading}
+          setWhLoading={setWhLoading}
+          onRefreshWebhooks={fetchWebhooks}
         />
       )}
+
+
 
       {/* Confirm clear modal */}
       {showConfirm && (
