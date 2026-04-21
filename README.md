@@ -333,10 +333,14 @@ All colours are driven by CSS custom properties (variables), making it straightf
 
 ## License
 
-Copyright (C) 2024 — Present, Heimdall Contributors.
+Copyright (C) 2026 — Present, Heimdall Contributors.
 
-This program is free software: you can redistribute it and/or modify it under the terms of the **GNU Affero General Public License** as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
-
+This program is free software: you can redistribute it and/or modify it under the terms of the **GNU Affero General Public License** as published by the Free Software Foundation.
 This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the [GNU Affero General Public License](https://www.gnu.org/licenses/agpl-3.0.html) for more details.
 
 > Under the AGPL-3.0, if you run a modified version of Heimdall over a network (e.g. as a hosted service), you must make the complete corresponding source code available to users of that service.
+
+
+<div align="center">
+<sub>Built for blue team ops. No cloud. No telemetry. Your data stays on your network.</sub>
+</div>
