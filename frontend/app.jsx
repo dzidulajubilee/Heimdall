@@ -186,7 +186,7 @@ function ConfirmDialog({ title, body, confirmLabel = 'Confirm', variant = 'dange
       <div className="confirm-box">
         <div className={`confirm-icon ${variant}`}>{icon}</div>
         <div className="confirm-title">{title}</div>
-        <div className="confirm-body" dangerouslySetInnerHTML={{ __html: body }} />
+        <div className="confirm-body">{body}</div>
         <div className="confirm-footer">
           <button className="btn-modal" onClick={onClose}>Cancel</button>
           <button
@@ -1194,7 +1194,7 @@ function SettingsView({ theme, setTheme, role, username, onLogout }) {
   function confirmDeleteUser(u) {
     setConfirm({
       title: 'Delete user',
-      body: `Are you sure you want to delete <strong>${u.username}</strong>? This cannot be undone.`,
+      body: <>Are you sure you want to delete <strong>{u.username}</strong>? This cannot be undone.</>,
       confirmLabel: 'Delete user',
       variant: 'danger',
       onConfirm: async () => { await fetch(`/users/${u.id}`, { method: 'DELETE' }); loadUsers(); },
@@ -1204,7 +1204,7 @@ function SettingsView({ theme, setTheme, role, username, onLogout }) {
   function confirmClearData(ep, label, count) {
     setConfirm({
       title: `Clear all ${label}`,
-      body: `This will permanently delete <strong>${count} ${label} records</strong>. This action cannot be undone.`,
+      body: <>This will permanently delete <strong>{count} {label} records</strong>. This action cannot be undone.</>,
       confirmLabel: `Clear ${label}`,
       variant: 'warning',
       onConfirm: async () => { await fetch(ep, { method: 'DELETE' }); loadHealth(); },
@@ -1221,7 +1221,7 @@ function SettingsView({ theme, setTheme, role, username, onLogout }) {
   function confirmDeleteWebhook(wh) {
     setConfirm({
       title: 'Delete webhook',
-      body: `Delete <strong>${wh.name}</strong>? All configuration will be lost.`,
+      body: <>Delete <strong>{wh.name}</strong>? All configuration will be lost.</>,
       confirmLabel: 'Delete webhook',
       variant: 'danger',
       onConfirm: async () => { await fetch(`/webhooks/${wh.id}`, { method: 'DELETE' }); loadWebhooks(); },

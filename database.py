@@ -15,6 +15,21 @@ from config import RETAIN_DAYS
 
 log = logging.getLogger("heimdall.db")
 
+# Tables that are allowed to appear in dynamically-built SQL statements.
+# This prevents any future caller from accidentally passing an untrusted
+# string into an f-string query and causing SQL injection.
+_ALLOWED_TABLES = frozenset({
+    "alerts", "flows", "dns_events", "http_events",
+    "alert_meta", "alert_notes", "alert_activity",
+})
+
+
+def _safe_table(name: str) -> str:
+    """Return `name` unchanged if it is a known table, raise ValueError otherwise."""
+    if name not in _ALLOWED_TABLES:
+        raise ValueError(f"Disallowed table name: {name!r}")
+    return name
+
 
 class AlertDB:
     def __init__(self, path: str, retain_days: int = RETAIN_DAYS):
@@ -351,7 +366,7 @@ class AlertDB:
         cutoff = time.time() - self.retain_days * 86400
         total  = 0
         for table in ("alerts","flows","dns_events","http_events"):
-            cur = self._conn().execute(f"DELETE FROM {table} WHERE ts_epoch<?", (cutoff,))
+            cur = self._conn().execute(f"DELETE FROM {_safe_table(table)} WHERE ts_epoch<?", (cutoff,))
             total += cur.rowcount
         self._conn().commit()
         if total:
@@ -454,8 +469,8 @@ class AlertDB:
     def stats(self) -> dict:
         c      = self._conn()
         cutoff = time.time() - self.retain_days * 86400
-        def _cnt(t):    return c.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
-        def _recent(t): return c.execute(f"SELECT COUNT(*) FROM {t} WHERE ts_epoch>=?", (cutoff,)).fetchone()[0]
+        def _cnt(t):    return c.execute(f"SELECT COUNT(*) FROM {_safe_table(t)}").fetchone()[0]
+        def _recent(t): return c.execute(f"SELECT COUNT(*) FROM {_safe_table(t)} WHERE ts_epoch>=?", (cutoff,)).fetchone()[0]
         oldest = c.execute("SELECT MIN(ts) FROM alerts").fetchone()[0]
         return {
             "alerts": {"total":_cnt("alerts"),     "recent":_recent("alerts")},
