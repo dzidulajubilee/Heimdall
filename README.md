@@ -1,4 +1,4 @@
-# Heimdall IDS Dashboard
+# 🛡️ Heimdall IDS Dashboard
 
 A lightweight, zero-dependency web dashboard for [Suricata](https://suricata.io/) IDS. Heimdall tails your `eve.json` log in real time, stores every event in a local SQLite database, and streams live alerts to any number of browser clients over Server-Sent Events (SSE).
 
