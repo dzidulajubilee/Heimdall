@@ -1,16 +1,15 @@
 """
 Heimdall IDS Dashboard — Authentication (RBAC-aware)
 Single-password emergency fallback + full user/session management.
-Sessions now carry username and role, checked on every protected request.
+Sessions carry username and role, checked on every protected request.
 """
 
-import hashlib
-import hmac
 import logging
 import secrets
 import time
 
-from config import SESSION_TTL, PBKDF2_ITERS
+from config         import SESSION_TTL
+from password_utils import hash_password, verify_password
 
 log = logging.getLogger("heimdall.auth")
 
@@ -20,7 +19,7 @@ class AuthManager:
     Manages the legacy single-password (emergency fallback) and the
     RBAC session table.
 
-    Session tokens now store username + role so the handler can enforce
+    Session tokens store username + role so the handler can enforce
     per-role permissions without a DB lookup on every request.
 
     Migration:
@@ -51,7 +50,7 @@ class AuthManager:
                 role       TEXT NOT NULL DEFAULT 'admin'
             )
         """)
-        # If upgrading: add columns to existing sessions table
+        # Upgrade: add columns to existing sessions table if absent
         cols = {r[1] for r in c.execute("PRAGMA table_info(sessions)").fetchall()}
         if "username" not in cols:
             c.execute("ALTER TABLE sessions ADD COLUMN username TEXT DEFAULT ''")
@@ -61,28 +60,11 @@ class AuthManager:
 
     # ── Single-password (legacy / emergency fallback) ─────────────────────────
 
-    def _hash(self, password: str) -> str:
-        salt = secrets.token_hex(16)
-        h    = hashlib.pbkdf2_hmac(
-            "sha256", password.encode(), salt.encode(), PBKDF2_ITERS
-        )
-        return f"{salt}${h.hex()}"
-
-    def _verify(self, password: str, stored: str) -> bool:
-        try:
-            salt, h = stored.split("$", 1)
-            check   = hashlib.pbkdf2_hmac(
-                "sha256", password.encode(), salt.encode(), PBKDF2_ITERS
-            )
-            return hmac.compare_digest(check.hex(), h)
-        except Exception:
-            return False
-
     def set_password(self, password: str):
         c = self._conn()
         c.execute(
             "INSERT OR REPLACE INTO auth (key, value) VALUES ('pw_hash', ?)",
-            (self._hash(password),),
+            (hash_password(password),),
         )
         c.commit()
         log.info("Single-password updated.")
@@ -94,9 +76,9 @@ class AuthManager:
         return row[0] if row else None
 
     def check_password(self, password: str) -> bool:
-        """Emergency fallback: checks against single stored password."""
+        """Emergency fallback: checks against the single stored password."""
         stored = self.get_hash()
-        return bool(stored and self._verify(password, stored))
+        return bool(stored and verify_password(password, stored))
 
     # ── Sessions ──────────────────────────────────────────────────────────────
 
@@ -121,7 +103,7 @@ class AuthManager:
     def get_session(self, token: str) -> dict | None:
         """
         Return session dict {token, username, role} if valid,
-        or None if missing/expired.
+        or None if missing / expired.
         """
         if not token:
             return None

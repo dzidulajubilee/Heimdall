@@ -771,9 +771,43 @@ function FlowsView() {
 // DNS VIEW  (flat fields from fetch_dns)
 // ══════════════════════════════════════════════════════════════════════════════
 
+function DNSDetailModal({ record, onClose }) {
+  return (
+    <div className="confirm-backdrop" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="confirm-box" style={{ maxWidth: 520, width: '92vw' }}>
+        <div className="confirm-icon" style={{ background: 'var(--sev-info-bg)' }}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+               stroke="var(--sev-info)" strokeWidth="2" strokeLinecap="round">
+            <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/>
+            <line x1="12" y1="16" x2="12.01" y2="16"/>
+          </svg>
+        </div>
+        <div className="confirm-title" style={{ marginBottom: 4 }}>DNS Record Detail</div>
+        <div className="confirm-body" style={{ marginBottom: 14 }}>
+          <span className="dns-rrname" style={{ fontSize: 13 }}>{record.rrname || '—'}</span>
+        </div>
+        <pre style={{
+          background: 'var(--s2)', border: '1px solid var(--ln)',
+          borderRadius: 'var(--radius-md)', padding: '12px 14px',
+          fontSize: 11, fontFamily: 'var(--mono)', color: 'var(--tx1)',
+          textAlign: 'left', overflowX: 'auto', maxHeight: 320,
+          overflowY: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+          margin: 0,
+        }}>
+          {JSON.stringify(record, null, 2)}
+        </pre>
+        <div className="confirm-footer" style={{ marginTop: 16 }}>
+          <button className="btn-modal confirm" style={{ background: 'var(--accent-bg)', borderColor: 'var(--accent)', color: 'var(--accent)' }} onClick={onClose}>Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DNSView() {
-  const [records, setRecords] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [records,  setRecords]  = useState([]);
+  const [loading,  setLoading]  = useState(true);
+  const [selected, setSelected] = useState(null);
 
   useEffect(() => {
     fetch('/dns?limit=200')
@@ -786,30 +820,35 @@ function DNSView() {
   if (!records.length) return <div className="empty-state">No DNS events</div>;
 
   return (
-    <div className="table-view">
-      <table className="data-table">
-        <thead><tr>
-          <th>Time</th><th>Client</th><th>Query</th><th>Type</th>
-          <th>Dir</th><th>RCode</th><th>TTL</th>
-        </tr></thead>
-        <tbody>
-          {records.map((d, i) => (
-            <tr key={i}>
-              <td>{d.ts?.slice(11, 19)}</td>
-              <td className="td-primary">{d.src_ip}</td>
-              <td><span className="dns-rrname">{d.rrname || '—'}</span></td>
-              <td>{d.rrtype || '—'}</td>
-              <td>{d.dns_type || '—'}</td>
-              <td style={{ color: d.rcode === 'NOERROR' ? 'var(--success)' :
-                           d.rcode ? 'var(--danger)' : 'var(--tx3)' }}>
-                {d.rcode || '—'}
-              </td>
-              <td>{d.ttl ?? '—'}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <>
+      <div className="table-view">
+        <table className="data-table">
+          <thead><tr>
+            <th>Time</th><th>Client</th><th>Query</th><th>Type</th>
+            <th>Dir</th><th>RCode</th><th>TTL</th>
+          </tr></thead>
+          <tbody>
+            {records.map((d, i) => (
+              <tr key={i} onClick={() => setSelected(d)}
+                  style={{ cursor: 'pointer' }}
+                  className="dns-row-hover">
+                <td>{d.ts?.slice(11, 19)}</td>
+                <td className="td-primary">{d.src_ip}</td>
+                <td><span className="dns-rrname">{d.rrname || '—'}</span></td>
+                <td>{d.rrtype || '—'}</td>
+                <td>{d.dns_type || '—'}</td>
+                <td style={{ color: d.rcode === 'NOERROR' ? 'var(--success)' :
+                             d.rcode ? 'var(--danger)' : 'var(--tx3)' }}>
+                  {d.rcode || '—'}
+                </td>
+                <td>{d.ttl ?? '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {selected && <DNSDetailModal record={selected} onClose={() => setSelected(null)} />}
+    </>
   );
 }
 
@@ -1456,6 +1495,7 @@ function App() {
   const [selectedAlerts, setSelectedAlerts] = useState(new Set());
   const [filteredAlertIds, setFilteredAlertIds] = useState([]);
   const [allFilteredSelected, setAllFilteredSelected] = useState(false);
+  const [confirm,  setConfirm]  = useState(null);
 
   function toggleSelectAlert(id) {
     setSelectedAlerts(prev => {
@@ -1483,6 +1523,20 @@ function App() {
     });
     if (res.ok) {
       setAlerts(prev => prev.map(a => selectedAlerts.has(a.id) ? { ...a, status } : a));
+      clearSelection();
+    }
+  }
+
+  async function bulkDeleteSelected() {
+    const ids = [...selectedAlerts];
+    if (!ids.length) return;
+    const res = await fetch('/alerts/delete-selected', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
+    });
+    if (res.ok) {
+      setAlerts(prev => prev.filter(a => !selectedAlerts.has(a.id)));
       clearSelection();
     }
   }
@@ -1652,6 +1706,19 @@ function App() {
                   style={{ fontSize: 10, padding: '2px 8px' }}>
                   {allFilteredSelected ? 'Deselect All' : 'Select All'}
                 </button>
+                {role === 'admin' && selectedAlerts.size > 0 && (
+                  <button className="btn-sm danger"
+                    onClick={() => setConfirm({
+                      title: `Delete ${selectedAlerts.size} alert${selectedAlerts.size !== 1 ? 's' : ''}?`,
+                      body: 'Permanently remove the selected alerts from the database. This cannot be undone.',
+                      confirmLabel: 'Delete',
+                      variant: 'danger',
+                      onConfirm: bulkDeleteSelected,
+                    })}
+                    style={{ fontSize: 10, padding: '2px 8px' }}>
+                    Delete Selected
+                  </button>
+                )}
                 <span className="main-sort">Grouped by <span>severity</span></span>
               </>
             )}
@@ -1701,6 +1768,16 @@ function App() {
         {username && <div className="status-item" style={{ color: 'var(--tx4)' }}>{username} · {role}</div>}
       </footer>
 
+      {confirm !== null && (
+        <ConfirmDialog
+          title={confirm.title}
+          body={confirm.body}
+          confirmLabel={confirm.confirmLabel}
+          variant={confirm.variant}
+          onConfirm={confirm.onConfirm}
+          onClose={() => setConfirm(null)}
+        />
+      )}
     </div>
   );
 }

@@ -7,21 +7,33 @@ Each thread gets its own connection via threading.local().
 
 import json
 import logging
+import re
 import sqlite3
 import threading
 import time
+from datetime import datetime
 
 from config import RETAIN_DAYS
 
 log = logging.getLogger("heimdall.db")
 
+# ── Pre-compiled timestamp normalisation patterns ─────────────────────────────
+# Used in _to_epoch() on every event ingested — compiling once at module load
+# avoids repeated re.compile() overhead on the hottest path in the codebase.
+_RE_USEC = re.compile(r"\.\d+")           # strip fractional seconds
+_RE_TZ   = re.compile(r"\+0000$|Z$")     # normalise +0000 / Z → +00:00
+
 # Tables that are allowed to appear in dynamically-built SQL statements.
-# This prevents any future caller from accidentally passing an untrusted
-# string into an f-string query and causing SQL injection.
+# Prevents any future caller from accidentally injecting an untrusted string.
 _ALLOWED_TABLES = frozenset({
     "alerts", "flows", "dns_events", "http_events",
     "alert_meta", "alert_notes", "alert_activity",
 })
+
+# Maximum IDs accepted in a single delete_by_ids() call.
+# SQLite's default SQLITE_MAX_VARIABLE_NUMBER is 999; staying well under
+# it prevents OperationalError on large batches.
+_MAX_DELETE_IDS = 500
 
 
 def _safe_table(name: str) -> str:
@@ -53,8 +65,11 @@ class AlertDB:
                 src_ip TEXT, src_port INTEGER, dst_ip TEXT, dst_port INTEGER,
                 proto TEXT, iface TEXT, flow_id INTEGER, sig_id INTEGER,
                 sig_msg TEXT, category TEXT, severity TEXT, action TEXT, raw_json TEXT)""")
-            c.execute("CREATE INDEX IF NOT EXISTS idx_a_ts  ON alerts (ts_epoch)")
-            c.execute("CREATE INDEX IF NOT EXISTS idx_a_sev ON alerts (severity)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_a_ts     ON alerts (ts_epoch)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_a_sev    ON alerts (severity)")
+            # Composite index — accelerates the common pattern of time-range
+            # filtering combined with severity grouping (charts, filtered views).
+            c.execute("CREATE INDEX IF NOT EXISTS idx_a_ts_sev ON alerts (ts_epoch, severity)")
 
             c.execute("""CREATE TABLE IF NOT EXISTS flows (
                 flow_id INTEGER PRIMARY KEY, ts TEXT NOT NULL, ts_epoch REAL NOT NULL,
@@ -82,7 +97,7 @@ class AlertDB:
             c.execute("CREATE INDEX IF NOT EXISTS idx_h_ts       ON http_events (ts_epoch)")
             c.execute("CREATE INDEX IF NOT EXISTS idx_h_hostname ON http_events (hostname)")
 
-            # ── Alert metadata: per-alert status (acknowledged / investigating / closed)
+            # ── Alert metadata: per-alert triage status
             c.execute("""CREATE TABLE IF NOT EXISTS alert_meta (
                 alert_id   TEXT PRIMARY KEY,
                 status     TEXT,
@@ -90,7 +105,7 @@ class AlertDB:
                 updated_at REAL NOT NULL DEFAULT 0
             )""")
 
-            # ── Alert notes: timestamped analyst notes attached to an alert
+            # ── Alert notes: timestamped analyst notes
             c.execute("""CREATE TABLE IF NOT EXISTS alert_notes (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
                 alert_id   TEXT NOT NULL,
@@ -115,29 +130,37 @@ class AlertDB:
         return self._local.conn
 
     def _to_epoch(self, ts: str) -> float:
-        from datetime import datetime
-        for fmt in ("%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%dT%H:%M:%S%z"):
-            try: return datetime.strptime(ts, fmt).timestamp()
-            except ValueError: pass
-        return time.time()
+        """
+        Convert a Suricata ISO-8601 timestamp to a Unix epoch float.
+        Uses pre-compiled regexes (_RE_USEC, _RE_TZ) to normalise the
+        string before a single datetime.fromisoformat() call, avoiding
+        the try-two-formats loop that was in place previously.
+        """
+        try:
+            ts = _RE_USEC.sub("", ts)             # drop microseconds
+            ts = _RE_TZ.sub("+00:00", ts)          # normalise timezone
+            return datetime.fromisoformat(ts).timestamp()
+        except (ValueError, TypeError):
+            return time.time()
 
     # ── Alerts ────────────────────────────────────────────────────────────────
 
     def insert(self, alert: dict):
         try:
-            self._conn().execute(
+            c = self._conn()
+            c.execute(
                 """INSERT OR IGNORE INTO alerts
                    (id,ts,ts_epoch,src_ip,src_port,dst_ip,dst_port,
                     proto,iface,flow_id,sig_id,sig_msg,category,severity,action,raw_json)
                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (alert["id"], alert.get("ts",""), self._to_epoch(alert.get("ts","")),
-                 alert.get("src_ip",""), alert.get("src_port",0),
-                 alert.get("dst_ip",""), alert.get("dst_port",0),
-                 alert.get("proto",""), alert.get("iface",""), alert.get("flow_id",0),
-                 alert.get("sig_id",0), alert.get("sig_msg",""), alert.get("category",""),
-                 alert.get("severity","info"), alert.get("action","allowed"),
-                 json.dumps(alert.get("raw",{}))))
-            self._conn().commit()
+                (alert["id"], alert.get("ts", ""), self._to_epoch(alert.get("ts", "")),
+                 alert.get("src_ip", ""), alert.get("src_port", 0),
+                 alert.get("dst_ip", ""), alert.get("dst_port", 0),
+                 alert.get("proto", ""), alert.get("iface", ""), alert.get("flow_id", 0),
+                 alert.get("sig_id", 0), alert.get("sig_msg", ""), alert.get("category", ""),
+                 alert.get("severity", "info"), alert.get("action", "allowed"),
+                 json.dumps(alert.get("raw", {}))))
+            c.commit()
         except sqlite3.Error as e:
             log.warning("DB insert (alert): %s", e)
 
@@ -154,7 +177,7 @@ class AlertDB:
         result = []
         for row in rows:
             d = dict(row)
-            try: d["raw"] = json.loads(d.pop("raw_json","{}"))
+            try:    d["raw"] = json.loads(d.pop("raw_json", "{}"))
             except: d["raw"] = {}
             result.append(d)
         return result
@@ -198,7 +221,7 @@ class AlertDB:
                  updated_at = excluded.updated_at""",
             (alert_id, status, username, now)
         )
-        action = f"Status cleared" if status is None else f"Marked as {status}"
+        action = "Status cleared" if status is None else f"Marked as {status}"
         c.execute(
             "INSERT INTO alert_activity (alert_id, username, action, created_at) VALUES (?,?,?,?)",
             (alert_id, username, action, now)
@@ -206,65 +229,97 @@ class AlertDB:
         c.commit()
 
     def bulk_set_status(self, alert_ids: list, status: str, username: str):
-        """Bulk-set status on many alerts at once."""
+        """
+        Bulk-set triage status on many alerts at once.
+        Uses executemany() for both the upsert and activity rows —
+        O(1) round-trips regardless of batch size, with a single commit.
+        """
         now    = time.time()
         action = f"Marked as {status}"
         c      = self._conn()
-        for aid in alert_ids:
-            c.execute(
-                """INSERT INTO alert_meta (alert_id, status, updated_by, updated_at)
-                   VALUES (?, ?, ?, ?)
-                   ON CONFLICT(alert_id) DO UPDATE SET
-                     status     = excluded.status,
-                     updated_by = excluded.updated_by,
-                     updated_at = excluded.updated_at""",
-                (aid, status, username, now)
-            )
-            c.execute(
-                "INSERT INTO alert_activity (alert_id, username, action, created_at) VALUES (?,?,?,?)",
-                (aid, username, action, now)
-            )
+        c.executemany(
+            """INSERT INTO alert_meta (alert_id, status, updated_by, updated_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(alert_id) DO UPDATE SET
+                 status     = excluded.status,
+                 updated_by = excluded.updated_by,
+                 updated_at = excluded.updated_at""",
+            [(aid, status, username, now) for aid in alert_ids],
+        )
+        c.executemany(
+            "INSERT INTO alert_activity (alert_id, username, action, created_at) "
+            "VALUES (?,?,?,?)",
+            [(aid, username, action, now) for aid in alert_ids],
+        )
         c.commit()
 
     def add_note(self, alert_id: str, username: str, note: str) -> dict:
         """Append a timestamped note to an alert."""
         now = time.time()
-        self._conn().execute(
+        c   = self._conn()
+        c.execute(
             "INSERT INTO alert_notes (alert_id, username, note, created_at) VALUES (?,?,?,?)",
             (alert_id, username, note, now)
         )
-        self._conn().commit()
+        c.commit()
         return {"alert_id": alert_id, "username": username, "note": note, "created_at": now}
+
+    def delete_by_ids(self, ids: list) -> int:
+        """
+        Permanently delete specific alerts and all associated metadata
+        (alert_meta, alert_notes, alert_activity) in a single transaction.
+
+        Safety measures:
+          - Coerces all IDs to str before use.
+          - Caps at _MAX_DELETE_IDS (500) to stay under SQLite's
+            SQLITE_MAX_VARIABLE_NUMBER limit (default 999).
+
+        Returns the number of alert rows deleted.
+        """
+        if not ids:
+            return 0
+        ids  = [str(i) for i in ids][:_MAX_DELETE_IDS]
+        ph   = ",".join("?" * len(ids))
+        c    = self._conn()
+        c.execute(f"DELETE FROM alert_meta     WHERE alert_id IN ({ph})", ids)
+        c.execute(f"DELETE FROM alert_notes    WHERE alert_id IN ({ph})", ids)
+        c.execute(f"DELETE FROM alert_activity WHERE alert_id IN ({ph})", ids)
+        cur = c.execute(f"DELETE FROM alerts WHERE id IN ({ph})", ids)
+        c.commit()
+        log.info("Deleted %d alerts by ID.", cur.rowcount)
+        return cur.rowcount
 
     # ── Flows ─────────────────────────────────────────────────────────────────
 
     def insert_flow(self, evt: dict):
-        f  = evt.get("flow", {})
-        ts = evt.get("timestamp", "")
+        f   = evt.get("flow", {})
+        ts  = evt.get("timestamp", "")
         dur = 0.0
         try:
-            from datetime import datetime
-            t1 = datetime.fromisoformat(f.get("start","").replace("+0000","+00:00"))
-            t2 = datetime.fromisoformat(f.get("end",  "").replace("+0000","+00:00"))
+            # datetime is now imported at module level
+            t1  = datetime.fromisoformat(f.get("start", "").replace("+0000", "+00:00"))
+            t2  = datetime.fromisoformat(f.get("end",   "").replace("+0000", "+00:00"))
             dur = (t2 - t1).total_seconds()
-        except Exception: pass
+        except Exception:
+            pass
         try:
-            self._conn().execute(
+            c = self._conn()
+            c.execute(
                 """INSERT OR IGNORE INTO flows
                    (flow_id,ts,ts_epoch,src_ip,src_port,dst_ip,dst_port,
                     proto,app_proto,iface,pkts_toserver,pkts_toclient,
                     bytes_toserver,bytes_toclient,duration_s,state,reason,alerted)
                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (evt.get("flow_id",0), ts, self._to_epoch(ts),
-                 evt.get("src_ip",""), evt.get("src_port",0),
-                 evt.get("dest_ip",""), evt.get("dest_port",0),
-                 evt.get("proto","").upper(), evt.get("app_proto",""),
-                 evt.get("in_iface",""),
-                 f.get("pkts_toserver",0), f.get("pkts_toclient",0),
-                 f.get("bytes_toserver",0), f.get("bytes_toclient",0),
-                 dur, f.get("state",""), f.get("reason",""),
+                (evt.get("flow_id", 0), ts, self._to_epoch(ts),
+                 evt.get("src_ip", ""), evt.get("src_port", 0),
+                 evt.get("dest_ip", ""), evt.get("dest_port", 0),
+                 evt.get("proto", "").upper(), evt.get("app_proto", ""),
+                 evt.get("in_iface", ""),
+                 f.get("pkts_toserver", 0), f.get("pkts_toclient", 0),
+                 f.get("bytes_toserver", 0), f.get("bytes_toclient", 0),
+                 dur, f.get("state", ""), f.get("reason", ""),
                  1 if f.get("alerted") else 0))
-            self._conn().commit()
+            c.commit()
         except sqlite3.Error as e:
             log.warning("DB insert (flow): %s", e)
 
@@ -281,24 +336,25 @@ class AlertDB:
     # ── DNS ───────────────────────────────────────────────────────────────────
 
     def insert_dns(self, evt: dict):
-        d   = evt.get("dns", {})
-        ts  = evt.get("timestamp", "")
-        uid = f"{evt.get('flow_id',0)}-{d.get('tx_id',0)}-{d.get('type','')}"
+        d            = evt.get("dns", {})
+        ts           = evt.get("timestamp", "")
+        uid          = f"{evt.get('flow_id',0)}-{d.get('tx_id',0)}-{d.get('type','')}"
         answers_json = json.dumps(d.get("answers", d.get("grouped", {})) or [])
         try:
-            self._conn().execute(
+            c = self._conn()
+            c.execute(
                 """INSERT OR IGNORE INTO dns_events
                    (id,ts,ts_epoch,src_ip,src_port,dst_ip,dst_port,
                     iface,flow_id,tx_id,dns_type,rrname,rrtype,rcode,ttl,answers)
                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (uid, ts, self._to_epoch(ts),
-                 evt.get("src_ip",""), evt.get("src_port",0),
-                 evt.get("dest_ip",""), evt.get("dest_port",0),
-                 evt.get("in_iface",""), evt.get("flow_id",0),
-                 d.get("tx_id",0), d.get("type",""),
-                 d.get("rrname",""), d.get("rrtype",""),
-                 d.get("rcode",""), d.get("ttl",0), answers_json))
-            self._conn().commit()
+                 evt.get("src_ip", ""), evt.get("src_port", 0),
+                 evt.get("dest_ip", ""), evt.get("dest_port", 0),
+                 evt.get("in_iface", ""), evt.get("flow_id", 0),
+                 d.get("tx_id", 0), d.get("type", ""),
+                 d.get("rrname", ""), d.get("rrtype", ""),
+                 d.get("rcode", ""), d.get("ttl", 0), answers_json))
+            c.commit()
         except sqlite3.Error as e:
             log.warning("DB insert (dns): %s", e)
 
@@ -312,14 +368,15 @@ class AlertDB:
         result = []
         for row in rows:
             d = dict(row)
-            try: d["answers"] = json.loads(d.get("answers") or "[]")
+            try:    d["answers"] = json.loads(d.get("answers") or "[]")
             except: d["answers"] = []
             result.append(d)
         return result
 
     def clear_dns(self) -> int:
-        cur = self._conn().execute("DELETE FROM dns_events")
-        self._conn().commit()
+        c   = self._conn()
+        cur = c.execute("DELETE FROM dns_events")
+        c.commit()
         log.info("DNS events cleared — %d rows deleted.", cur.rowcount)
         return cur.rowcount
 
@@ -330,23 +387,24 @@ class AlertDB:
         ts  = evt.get("timestamp", "")
         uid = f"{evt.get('flow_id',0)}-{evt.get('tx_id',0)}-http"
         try:
-            self._conn().execute(
+            c = self._conn()
+            c.execute(
                 """INSERT OR IGNORE INTO http_events
                    (id,ts,ts_epoch,src_ip,src_port,dst_ip,dst_port,
                     iface,flow_id,hostname,url,method,status,
                     user_agent,content_type,req_bytes,resp_bytes,protocol)
                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (uid, ts, self._to_epoch(ts),
-                 evt.get("src_ip",""), evt.get("src_port",0),
-                 evt.get("dest_ip",""), evt.get("dest_port",0),
-                 evt.get("in_iface",""), evt.get("flow_id",0),
-                 h.get("hostname",""), h.get("url",""),
-                 h.get("http_method",""), h.get("status",0),
-                 h.get("http_user_agent",""), h.get("http_content_type",""),
-                 h.get("request_headers_raw_len", h.get("length",0)),
-                 h.get("response_headers_raw_len", h.get("response_len",0)),
-                 h.get("protocol","")))
-            self._conn().commit()
+                 evt.get("src_ip", ""), evt.get("src_port", 0),
+                 evt.get("dest_ip", ""), evt.get("dest_port", 0),
+                 evt.get("in_iface", ""), evt.get("flow_id", 0),
+                 h.get("hostname", ""), h.get("url", ""),
+                 h.get("http_method", ""), h.get("status", 0),
+                 h.get("http_user_agent", ""), h.get("http_content_type", ""),
+                 h.get("request_headers_raw_len", h.get("length", 0)),
+                 h.get("response_headers_raw_len", h.get("response_len", 0)),
+                 h.get("protocol", "")))
+            c.commit()
         except sqlite3.Error as e:
             log.warning("DB insert (http): %s", e)
 
@@ -365,25 +423,30 @@ class AlertDB:
     def purge_old(self):
         cutoff = time.time() - self.retain_days * 86400
         total  = 0
-        for table in ("alerts","flows","dns_events","http_events"):
-            cur = self._conn().execute(f"DELETE FROM {_safe_table(table)} WHERE ts_epoch<?", (cutoff,))
+        c      = self._conn()
+        for table in ("alerts", "flows", "dns_events", "http_events"):
+            cur    = c.execute(
+                f"DELETE FROM {_safe_table(table)} WHERE ts_epoch<?", (cutoff,)
+            )
             total += cur.rowcount
-        self._conn().commit()
+        c.commit()
         if total:
             log.info("Purged %d total rows older than %d days.", total, self.retain_days)
 
     def clear_all(self) -> int:
-        cur = self._conn().execute("DELETE FROM alerts")
-        self._conn().execute("DELETE FROM alert_meta")
-        self._conn().execute("DELETE FROM alert_notes")
-        self._conn().execute("DELETE FROM alert_activity")
-        self._conn().commit()
+        c   = self._conn()
+        cur = c.execute("DELETE FROM alerts")
+        c.execute("DELETE FROM alert_meta")
+        c.execute("DELETE FROM alert_notes")
+        c.execute("DELETE FROM alert_activity")
+        c.commit()
         log.info("Alerts cleared — %d rows deleted.", cur.rowcount)
         return cur.rowcount
 
     def clear_flows(self) -> int:
-        cur = self._conn().execute("DELETE FROM flows")
-        self._conn().commit()
+        c   = self._conn()
+        cur = c.execute("DELETE FROM flows")
+        c.commit()
         log.info("Flows cleared — %d rows deleted.", cur.rowcount)
         return cur.rowcount
 
@@ -470,12 +533,14 @@ class AlertDB:
         c      = self._conn()
         cutoff = time.time() - self.retain_days * 86400
         def _cnt(t):    return c.execute(f"SELECT COUNT(*) FROM {_safe_table(t)}").fetchone()[0]
-        def _recent(t): return c.execute(f"SELECT COUNT(*) FROM {_safe_table(t)} WHERE ts_epoch>=?", (cutoff,)).fetchone()[0]
+        def _recent(t): return c.execute(
+            f"SELECT COUNT(*) FROM {_safe_table(t)} WHERE ts_epoch>=?", (cutoff,)
+        ).fetchone()[0]
         oldest = c.execute("SELECT MIN(ts) FROM alerts").fetchone()[0]
         return {
-            "alerts": {"total":_cnt("alerts"),     "recent":_recent("alerts")},
-            "flows":  {"total":_cnt("flows"),       "recent":_recent("flows")},
-            "dns":    {"total":_cnt("dns_events"),  "recent":_recent("dns_events")},
-            "http":   {"total":_cnt("http_events"), "recent":_recent("http_events")},
+            "alerts": {"total": _cnt("alerts"),      "recent": _recent("alerts")},
+            "flows":  {"total": _cnt("flows"),        "recent": _recent("flows")},
+            "dns":    {"total": _cnt("dns_events"),   "recent": _recent("dns_events")},
+            "http":   {"total": _cnt("http_events"),  "recent": _recent("http_events")},
             "oldest": oldest,
         }
