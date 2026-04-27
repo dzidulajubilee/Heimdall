@@ -1,19 +1,27 @@
 #!/usr/bin/env python3
 """
-Heimdall IDS Dashboard — Version 1 (Alerts)
-Entry point: wires all modules together and starts the server.
+Heimdall IDS Dashboard — Entry Point
+Wires all modules together and starts the HTTP server.
 
 Usage
 -----
     python3 server.py
     python3 server.py --eve /var/log/suricata/eve.json --port 8765
     python3 server.py --password mysecretpassword      # set/change password
-    python3 server.py --db /var/lib/heimdall/alerts.db --retain-days 90
+    python3 server.py --db /var/lib/heimdall/events.db --retain-days 90
+
+Dual-database layout
+---------------------
+  events.db  — high-volume writes: alerts, flows, dns_events, http_events
+  config.db  — low-write config:   auth, sessions, users, webhooks
+
+Keeping them separate means alert ingestion never contends with
+authentication or settings reads on the SQLite WAL lock.
 
 First run
 ---------
 If no password has been set a random one is generated, printed to the
-console, and saved (hashed) in the database.  Change it any time:
+console, and saved (hashed) in the config database.  Change it any time:
     python3 server.py --password <new-password>
 """
 
@@ -26,11 +34,12 @@ from http.server import HTTPServer
 
 import config
 from auth      import AuthManager
-from users     import UserManager
+from config_db import ConfigDB
 from database  import AlertDB
 from handlers  import Handler
 from registry  import Registry
 from tail      import purge_thread, tail_thread
+from users     import UserManager
 from webhooks  import WebhookDB, delivery_worker
 
 logging.basicConfig(
@@ -58,7 +67,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--host",         default=config.DEFAULT_HOST,
                    help="Bind address")
     p.add_argument("--db",           default=str(config.DEFAULT_DB),
-                   help="Path to SQLite database file")
+                   help="Path to events SQLite database (alerts, flows, dns, http)")
+    p.add_argument("--config-db",    default=str(config.DEFAULT_CONFIG_DB),
+                   help="Path to config SQLite database (auth, sessions, users, webhooks)")
     p.add_argument("--retain-days",  default=config.RETAIN_DAYS, type=int,
                    help="Days to keep alerts in the database")
     p.add_argument("--password",     default=None,
@@ -69,9 +80,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main():
     args = build_arg_parser().parse_args()
 
-    # ── Database + auth ───────────────────────────────────────────────────────
-    db   = AlertDB(path=args.db, retain_days=args.retain_days)
-    auth = AuthManager(conn_fn=db._conn)
+    # ── Databases ─────────────────────────────────────────────────────────────
+    # events.db: high-volume alert/flow/dns/http writes
+    db = AlertDB(path=args.db, retain_days=args.retain_days)
+
+    # config.db: low-write auth, session, user, and webhook tables
+    cfg_db = ConfigDB(path=args.config_db)
+
+    # ── Auth (uses config db) ─────────────────────────────────────────────────
+    auth = AuthManager(conn_fn=cfg_db._conn)
 
     # Password management mode: set password and exit
     if args.password:
@@ -92,21 +109,20 @@ def main():
     # ── Registry ──────────────────────────────────────────────────────────────
     registry = Registry()
 
-    # ── Webhook DB ────────────────────────────────────────────────────────────
-    wdb = WebhookDB(conn_fn=db._conn)
+    # ── Webhook DB (uses config db) ───────────────────────────────────────────
+    wdb = WebhookDB(conn_fn=cfg_db._conn)
 
-    # ── User manager (RBAC) ──────────────────────────────────────────────────
-    um = UserManager(conn_fn=db._conn)
+    # ── User manager (RBAC, uses config db) ──────────────────────────────────
+    um = UserManager(conn_fn=cfg_db._conn)
 
-    # Bootstrap: if no users yet, auto-promote existing password to admin
+    # Bootstrap: if no users exist, create first admin account
     um.bootstrap_admin(auth.get_hash() or "")
 
-    # Invalidate all old sessions (they lack username/role) on first RBAC run
-    # Only wipe sessions that have no username set
-    db._conn().execute(
+    # Invalidate stale sessions that pre-date the RBAC username/role columns
+    cfg_db._conn().execute(
         "DELETE FROM sessions WHERE username = '' OR username IS NULL"
     )
-    db._conn().commit()
+    cfg_db._conn().commit()
 
     # ── Wire dependencies into the handler ────────────────────────────────────
     Handler.db       = db
@@ -118,10 +134,11 @@ def main():
     # ── Log DB state ──────────────────────────────────────────────────────────
     s = db.stats()
     log.info(
-        "DB: alerts=%d  flows=%d  dns=%d  oldest: %s",
+        "Events DB: alerts=%d  flows=%d  dns=%d  oldest: %s",
         s["alerts"]["total"], s["flows"]["total"],
         s["dns"]["total"], s["oldest"] or "none",
     )
+    log.info("Config DB: %s", args.config_db)
 
     # ── Background threads ────────────────────────────────────────────────────
     threading.Thread(

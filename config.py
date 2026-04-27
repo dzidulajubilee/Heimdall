@@ -6,10 +6,11 @@ All runtime constants live here. Override via CLI args in server.py.
 from pathlib import Path
 
 # ── Server defaults ───────────────────────────────────────────────────────────
-DEFAULT_EVE   = "/var/log/suricata/eve.json"
-DEFAULT_PORT  = 8765
-DEFAULT_HOST  = "0.0.0.0"
-DEFAULT_DB    = Path(__file__).parent / "alerts.db"
+DEFAULT_EVE       = "/var/log/suricata/eve.json"
+DEFAULT_PORT      = 8765
+DEFAULT_HOST      = "0.0.0.0"
+DEFAULT_DB        = Path(__file__).parent / "events.db"   # high-volume event store
+DEFAULT_CONFIG_DB = Path(__file__).parent / "config.db"   # low-write config store
 
 # ── Data retention ────────────────────────────────────────────────────────────
 RETAIN_DAYS   = 90      # days to keep alerts in SQLite

@@ -15,14 +15,52 @@ from collections import deque
 
 log = logging.getLogger("heimdall.tail")
 
-_SEVERITY_MAP = {1: "critical", 2: "high", 3: "medium", 4: "low"}
+# ── Severity mapping ──────────────────────────────────────────────────────────
+
+# Primary map: Suricata numeric priority → severity label.
+# Priority 5 (custom rules) now resolves to 'info'.
+_SEVERITY_MAP = {
+    1: "critical",
+    2: "high",
+    3: "medium",
+    4: "low",
+    5: "info",
+}
+
+# Category overrides: when a category string matches a key here, the
+# mapped severity is used instead of the numeric priority result.
+# This corrects cases where semantically weak classtypes are
+# over-reported by the numeric map alone.
+#
+# Adding a future reclassification requires only a single-line entry.
+_CATEGORY_OVERRIDE = {
+    # Suricata classtype strings (lowercased for comparison)
+    "not suspicious traffic":  "info",
+    "misc activity":           "low",
+}
 
 # Deduplication window: how long (seconds) to remember a seen alert ID
-DEDUP_WINDOW   = 5
-MAX_DEDUP_IDS  = 10_000
+DEDUP_WINDOW  = 5
+MAX_DEDUP_IDS = 10_000
 
 
-def map_severity(level):
+def map_severity(level: int, category: str = "") -> str:
+    """
+    Resolve a Suricata numeric priority to a Heimdall severity label.
+
+    Resolution order:
+      1. Category-based override (_CATEGORY_OVERRIDE) — takes precedence.
+      2. Numeric priority map (_SEVERITY_MAP).
+      3. Default: 'info'.
+
+    Args:
+        level:    Suricata alert.severity integer (1–5).
+        category: Suricata alert.category string (optional).
+    """
+    if category:
+        override = _CATEGORY_OVERRIDE.get(category.strip().lower())
+        if override:
+            return override
     return _SEVERITY_MAP.get(level, "info")
 
 
@@ -76,10 +114,11 @@ def parse_eve_line(raw: str):
     etype = evt.get("event_type")
 
     if etype == "alert":
-        a      = evt.get("alert", {})
-        flow_id = evt.get("flow_id", 0)
-        ts      = evt.get("timestamp", "")
-        sig_id  = a.get("signature_id", 0)
+        a        = evt.get("alert", {})
+        flow_id  = evt.get("flow_id", 0)
+        ts       = evt.get("timestamp", "")
+        sig_id   = a.get("signature_id", 0)
+        category = a.get("category", "")
         # Stable composite ID — avoids millisecond collisions across restarts
         uid = f"{flow_id}-{sig_id}-{ts}"
         return "alert", {
@@ -94,8 +133,9 @@ def parse_eve_line(raw: str):
             "flow_id":  flow_id,
             "sig_id":   sig_id,
             "sig_msg":  a.get("signature", ""),
-            "category": a.get("category", ""),
-            "severity": map_severity(a.get("severity")),
+            "category": category,
+            # Pass category so _CATEGORY_OVERRIDE can take precedence
+            "severity": map_severity(a.get("severity"), category),
             "action":   a.get("action", "allowed"),
             "raw":      evt,
         }

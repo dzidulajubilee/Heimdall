@@ -15,7 +15,8 @@ from config import FRONTEND_DIR, PING_EVERY, RETAIN_DAYS, SESSION_TTL
 
 log = logging.getLogger("heimdall.http")
 
-VALID_STATUSES = {"acknowledged", "investigating", "closed"}
+VALID_STATUSES  = {"acknowledged", "investigating", "closed"}
+_MAX_DELETE_IDS = 500   # mirrors database._MAX_DELETE_IDS
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -86,7 +87,7 @@ class Handler(BaseHTTPRequestHandler):
             self._redirect("/login")
         return False
 
-    # ── Low-level helpers ────────────────────────────────────────────────────
+    # ── Low-level helpers ─────────────────────────────────────────────────────
 
     def _redirect(self, location: str):
         self.send_response(302)
@@ -95,10 +96,26 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def _json(self, data, status: int = 200):
+        """Send a JSON response. Used for small API replies and error responses."""
         body = json.dumps(data).encode()
         self.send_response(status)
-        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Type",   "application/json")
         self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_json_body(self, data):
+        """
+        Send a JSON response with Cache-Control: no-cache.
+        Used for all data endpoints (_serve_alerts, _serve_table, _serve_charts)
+        to avoid duplicating the encode / set-headers / write pattern.
+        Always responds with HTTP 200.
+        """
+        body = json.dumps(data).encode()
+        self.send_response(200)
+        self.send_header("Content-Type",   "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control",  "no-cache")
         self.end_headers()
         self.wfile.write(body)
 
@@ -108,7 +125,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         data = path.read_bytes()
         self.send_response(200)
-        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Type",   content_type)
         self.send_header("Content-Length", str(len(data)))
         if no_cache:
             self.send_header("Cache-Control", "no-cache")
@@ -202,6 +219,8 @@ class Handler(BaseHTTPRequestHandler):
             self._webhook_create()
         elif p.path == "/alerts/bulk-status":
             self._bulk_alert_status()
+        elif p.path == "/alerts/delete-selected":
+            self._delete_selected_alerts()
         elif p.path.startswith("/alerts/"):
             aid_s = self._alert_id_from_path(p.path, "status")
             aid_n = self._alert_id_from_path(p.path, "notes")
@@ -224,10 +243,10 @@ class Handler(BaseHTTPRequestHandler):
         if not self._require_auth(): return
         p = urlparse(self.path)
         if p.path.startswith("/users/"):
-            try: self._user_update(int(p.path.split("/")[2]))
+            try:   self._user_update(int(p.path.split("/")[2]))
             except (ValueError, IndexError): self.send_error(400)
         elif p.path.startswith("/webhooks/"):
-            try: self._webhook_update(int(p.path.split("/")[2]))
+            try:   self._webhook_update(int(p.path.split("/")[2]))
             except (ValueError, IndexError): self.send_error(400)
         else:
             self.send_error(404)
@@ -245,7 +264,7 @@ class Handler(BaseHTTPRequestHandler):
             if not self._require_role("admin"): return
             self._json({"deleted": self.db.clear_dns()})
         elif p.path.startswith("/users/"):
-            try: self._user_delete(int(p.path.split("/")[2]))
+            try:   self._user_delete(int(p.path.split("/")[2]))
             except (ValueError, IndexError): self.send_error(400)
         elif p.path.startswith("/webhooks/"):
             try:
@@ -258,8 +277,13 @@ class Handler(BaseHTTPRequestHandler):
 
     # ── Static files ──────────────────────────────────────────────────────────
 
-    _MIME = {".html": "text/html; charset=utf-8", ".js": "application/javascript",
-             ".jsx": "application/javascript", ".css": "text/css", ".ico": "image/x-icon"}
+    _MIME = {
+        ".html": "text/html; charset=utf-8",
+        ".js":   "application/javascript",
+        ".jsx":  "application/javascript",
+        ".css":  "text/css",
+        ".ico":  "image/x-icon",
+    }
 
     def _serve_static(self, url_path: str):
         rel    = url_path.lstrip("/").removeprefix("frontend/")
@@ -268,8 +292,8 @@ class Handler(BaseHTTPRequestHandler):
             target.relative_to(FRONTEND_DIR.resolve())
         except ValueError:
             self.send_error(403); return
-        suffix   = target.suffix.lower()
-        ctype    = self._MIME.get(suffix, "application/octet-stream")
+        suffix = target.suffix.lower()
+        ctype  = self._MIME.get(suffix, "application/octet-stream")
         self._file(target, ctype, no_cache=suffix in (".html", ".jsx"))
 
     # ── Auth ─────────────────────────────────────────────────────────────────
@@ -319,13 +343,7 @@ class Handler(BaseHTTPRequestHandler):
     def _serve_alerts(self, qs: dict):
         days  = self._qs_int(qs, "days",  RETAIN_DAYS, 1, RETAIN_DAYS)
         limit = self._qs_int(qs, "limit", 5000,         1, 20000)
-        body  = json.dumps({"alerts": self.db.fetch_recent(days=days, limit=limit)}).encode()
-        self.send_response(200)
-        self.send_header("Content-Type",   "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control",  "no-cache")
-        self.end_headers()
-        self.wfile.write(body)
+        self._send_json_body({"alerts": self.db.fetch_recent(days=days, limit=limit)})
 
     def _set_alert_status(self, alert_id: str):
         if not self._require_role("admin", "analyst"): return
@@ -351,6 +369,34 @@ class Handler(BaseHTTPRequestHandler):
         self.db.bulk_set_status(alert_ids, status, self._username())
         self._json({"ok": True, "count": len(alert_ids), "status": status})
 
+    def _delete_selected_alerts(self):
+        """
+        POST /alerts/delete-selected
+        Body: {"ids": ["id1", "id2", ...]}
+        Admin only. Permanently removes alerts and their audit history.
+        Enforces a 500-ID cap and validates that all IDs are strings.
+        """
+        if not self._require_role("admin"): return
+        body, err = self._read_json()
+        if err: return
+
+        ids = body.get("ids", [])
+        if not isinstance(ids, list) or not ids:
+            self._json({"error": "ids (non-empty list) is required"}, 400); return
+
+        # Reject non-string IDs — catch accidental integer IDs from the client
+        if not all(isinstance(i, str) for i in ids):
+            self._json({"error": "all ids must be strings"}, 400); return
+
+        # Enforce cap before hitting the database layer
+        if len(ids) > _MAX_DELETE_IDS:
+            self._json({
+                "error": f"maximum {_MAX_DELETE_IDS} ids per request"
+            }, 400); return
+
+        deleted = self.db.delete_by_ids(ids)
+        self._json({"deleted": deleted})
+
     def _add_alert_note(self, alert_id: str):
         if not self._require_role("admin", "analyst"): return
         body, err = self._read_json()
@@ -365,21 +411,16 @@ class Handler(BaseHTTPRequestHandler):
     def _serve_table(self, table: str, qs: dict):
         days  = self._qs_int(qs, "days",  RETAIN_DAYS, 1, RETAIN_DAYS)
         limit = self._qs_int(qs, "limit", 5000,         1, 20000)
-        fetch = {"flows": self.db.fetch_flows,
-                 "dns":   self.db.fetch_dns,
-                 "http":  self.db.fetch_http}.get(table)
+        fetch = {
+            "flows": self.db.fetch_flows,
+            "dns":   self.db.fetch_dns,
+            "http":  self.db.fetch_http,
+        }.get(table)
         if fetch is None:
             self.send_error(404); return
-        body = json.dumps({table: fetch(days=days, limit=limit)}).encode()
-        self.send_response(200)
-        self.send_header("Content-Type",   "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control",  "no-cache")
-        self.end_headers()
-        self.wfile.write(body)
+        self._send_json_body({table: fetch(days=days, limit=limit)})
 
     def _serve_charts(self, qs: dict):
-        # trend in hours; 2160 = 90 days
         trend_window = self._qs_int(qs, "trend", 24, 24, 2160)
         days_window  = max(1, trend_window // 24)
         data = {
@@ -392,13 +433,7 @@ class Handler(BaseHTTPRequestHandler):
             "window_hours": trend_window,
             "window_days":  days_window,
         }
-        body = json.dumps(data).encode()
-        self.send_response(200)
-        self.send_header("Content-Type",   "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control",  "no-cache")
-        self.end_headers()
-        self.wfile.write(body)
+        self._send_json_body(data)
 
     # ── Webhooks ─────────────────────────────────────────────────────────────
 
@@ -408,7 +443,7 @@ class Handler(BaseHTTPRequestHandler):
         name       = str(body.get("name", "")).strip()
         wtype      = str(body.get("type", "generic")).strip()
         url        = str(body.get("url", "")).strip()
-        severities = body.get("severities", ["critical","high","medium","low","info"])
+        severities = body.get("severities", ["critical", "high", "medium", "low", "info"])
         enabled    = bool(body.get("enabled", True))
         if not name or not url:
             self._json({"error": "name and url are required"}, 400); return
