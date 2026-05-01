@@ -279,4 +279,4 @@ build.sh            Compiles all skin JSX → JS via esbuild
 
 ## License
 
-MIT
+AGPL
