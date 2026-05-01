@@ -1010,7 +1010,6 @@ function SettingsView({ theme, setTheme, role, username, onLogout }) {
             { label:'Alerts',      ep:'/alerts', count:health?.db?.alerts?.total??0 },
             { label:'Flows',       ep:'/flows',  count:health?.db?.flows?.total??0  },
             { label:'DNS events',  ep:'/dns',    count:health?.db?.dns?.total??0    },
-            { label:'HTTP events', ep:'/http',   count:health?.db?.http?.total??0   },
           ].map(row=>(
             <div key={row.label} className="data-mgmt-row">
               <div><div className="data-mgmt-label">{row.label}</div><div className="data-mgmt-sub">{row.count.toLocaleString()} records</div></div>
