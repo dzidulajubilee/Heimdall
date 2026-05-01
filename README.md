@@ -53,8 +53,8 @@ Then open **http://\<host\>:8765**
 ### Option B — Run directly from source
 
 ```bash
-git clone https://github.com/yourname/heimdall-ids
-cd heimdall-ids
+git clone https://github.com/dzidulajubilee/Heimdall.git
+cd Heimdall
 
 # Build the frontend (one-time, requires esbuild)
 ./build.sh
