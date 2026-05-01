@@ -1,0 +1,21 @@
+Package: heimdall-ids
+Version: 3.0.1
+Architecture: amd64
+Maintainer: Heimdall IDS <heimdall@localhost>
+Depends: python3 (>= 3.10)
+Section: net
+Priority: optional
+Description: Heimdall IDS Dashboard
+ A self-contained web dashboard for Suricata IDS that displays real-time
+ alerts, flows, DNS, and HTTP events from eve.json.
+ .
+ Features: RBAC user management, webhook notifications (Slack/Discord),
+ triage workflow, charts, multi-theme UI, and SSE live streaming.
+ All data is stored in SQLite. No external dependencies required.
+ .
+ After installation, enable and start the service:
+   sudo systemctl enable --now heimdall
+ .
+ The dashboard will be available at http://localhost:8765
+ Admin credentials are printed to the journal on first start:
+   sudo journalctl -u heimdall -n 30

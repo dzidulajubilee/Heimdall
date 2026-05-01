@@ -12,11 +12,11 @@ Usage
 
 Dual-database layout
 ---------------------
-  events.db  — high-volume writes: alerts, flows, dns_events, http_events
+  events.db  — high-volume writes: alerts, flows, http_events
+  dns.db     — dedicated DNS event store
   config.db  — low-write config:   auth, sessions, users, webhooks
 
-Keeping them separate means alert ingestion never contends with
-authentication or settings reads on the SQLite WAL lock.
+Keeping them separate means each write-heavy workload has its own WAL lock.
 
 First run
 ---------
@@ -36,6 +36,7 @@ import config
 from auth      import AuthManager
 from config_db import ConfigDB
 from database  import AlertDB
+from dns_db    import DNSDB
 from handlers  import Handler
 from registry  import Registry
 from tail      import purge_thread, tail_thread
@@ -70,6 +71,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
                    help="Path to events SQLite database (alerts, flows, dns, http)")
     p.add_argument("--config-db",    default=str(config.DEFAULT_CONFIG_DB),
                    help="Path to config SQLite database (auth, sessions, users, webhooks)")
+    p.add_argument("--dns-db",       default=str(config.DEFAULT_DNS_DB),
+                   help="Path to DNS SQLite database")
     p.add_argument("--retain-days",  default=config.RETAIN_DAYS, type=int,
                    help="Days to keep alerts in the database")
     p.add_argument("--password",     default=None,
@@ -81,8 +84,11 @@ def main():
     args = build_arg_parser().parse_args()
 
     # ── Databases ─────────────────────────────────────────────────────────────
-    # events.db: high-volume alert/flow/dns/http writes
+    # events.db: high-volume alert/flow/http writes
     db = AlertDB(path=args.db, retain_days=args.retain_days)
+
+    # dns.db: dedicated DNS event store
+    dns_db = DNSDB(path=args.dns_db, retain_days=args.retain_days)
 
     # config.db: low-write auth, session, user, and webhook tables
     cfg_db = ConfigDB(path=args.config_db)
@@ -102,6 +108,7 @@ def main():
         auth.set_password(pw)
         log.info("=" * 58)
         log.info("  No password set — generated a random one:")
+        log.info("  USERNAME: admin")
         log.info("  PASSWORD: %s", pw)
         log.info("  Change:   python3 server.py --password <new>")
         log.info("=" * 58)
@@ -126,6 +133,7 @@ def main():
 
     # ── Wire dependencies into the handler ────────────────────────────────────
     Handler.db       = db
+    Handler.dns_db   = dns_db
     Handler.auth     = auth
     Handler.registry = registry
     Handler.wdb      = wdb
@@ -134,23 +142,23 @@ def main():
     # ── Log DB state ──────────────────────────────────────────────────────────
     s = db.stats()
     log.info(
-        "Events DB: alerts=%d  flows=%d  dns=%d  oldest: %s",
-        s["alerts"]["total"], s["flows"]["total"],
-        s["dns"]["total"], s["oldest"] or "none",
+        "Events DB: alerts=%d  flows=%d  oldest: %s",
+        s["alerts"]["total"], s["flows"]["total"], s["oldest"] or "none",
     )
+    log.info("DNS    DB: %s records — %s", dns_db.count(), args.dns_db)
     log.info("Config DB: %s", args.config_db)
 
     # ── Background threads ────────────────────────────────────────────────────
     threading.Thread(
         target=tail_thread,
-        args=(args.eve, db, registry, wdb),
+        args=(args.eve, db, dns_db, registry, wdb),
         daemon=True,
         name="tail",
     ).start()
 
     threading.Thread(
         target=purge_thread,
-        args=(db, auth),
+        args=(db, dns_db, auth),
         daemon=True,
         name="purge",
     ).start()
