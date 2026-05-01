@@ -1,0 +1,41 @@
+[Unit]
+Description=Heimdall IDS Dashboard
+Documentation=https://github.com/heimdall-ids/heimdall
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=heimdall
+Group=heimdall
+WorkingDirectory=/var/lib/heimdall
+
+ExecStart=/usr/bin/heimdall \
+    --eve /var/log/suricata/eve.json \
+    --db /var/lib/heimdall/events.db \
+    --dns-db /var/lib/heimdall/dns.db \
+    --config-db /var/lib/heimdall/config.db \
+    --host 0.0.0.0 \
+    --port 8765
+
+Restart=on-failure
+RestartSec=5s
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=heimdall
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/heimdall /var/log/heimdall
+ReadOnlyPaths=/var/log/suricata
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+
+[Install]
+WantedBy=multi-user.target

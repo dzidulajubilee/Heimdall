@@ -1,0 +1,19 @@
+#!/bin/bash
+set -e
+
+if [ "$1" = "purge" ]; then
+    # Remove data only on purge (dpkg --purge), not plain remove
+    rm -rf /var/lib/heimdall
+    rm -rf /var/log/heimdall
+
+    # Remove the system user
+    if id -u heimdall &>/dev/null; then
+        userdel heimdall 2>/dev/null || true
+    fi
+fi
+
+if command -v systemctl &>/dev/null && systemctl is-system-running &>/dev/null; then
+    systemctl daemon-reload
+fi
+
+exit 0

@@ -734,6 +734,15 @@ function FlowsView() {
       .then(r => r.json())
       .then(d => { setFlows(d.flows || []); setLoading(false); })
       .catch(() => setLoading(false));
+    // SSE: prepend new flows as they arrive without a page refresh
+    const es = new EventSource('/events');
+    es.addEventListener('flow', e => {
+      try {
+        const f = JSON.parse(e.data);
+        setFlows(prev => [f, ...prev].slice(0, 500));
+      } catch {}
+    });
+    return () => es.close();
   }, []);
 
   if (loading) return <div className="empty-state">Loading flows…</div>;
@@ -814,6 +823,15 @@ function DNSView() {
       .then(r => r.json())
       .then(d => { setRecords(d.dns || []); setLoading(false); })
       .catch(() => setLoading(false));
+    // SSE: prepend new DNS records as they arrive
+    const es = new EventSource('/events');
+    es.addEventListener('dns', e => {
+      try {
+        const d = JSON.parse(e.data);
+        setRecords(prev => [d, ...prev].slice(0, 500));
+      } catch {}
+    });
+    return () => es.close();
   }, []);
 
   if (loading) return <div className="empty-state">Loading DNS records…</div>;

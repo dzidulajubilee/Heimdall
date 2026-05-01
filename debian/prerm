@@ -1,0 +1,14 @@
+#!/bin/bash
+set -e
+
+# Stop and disable the service before removing files
+if command -v systemctl &>/dev/null; then
+    if systemctl is-active --quiet heimdall; then
+        systemctl stop heimdall
+    fi
+    if systemctl is-enabled --quiet heimdall 2>/dev/null; then
+        systemctl disable heimdall
+    fi
+fi
+
+exit 0

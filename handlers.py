@@ -199,8 +199,12 @@ class Handler(BaseHTTPRequestHandler):
             if not self._require_role("admin"): return
             self._json({"users": self.um.get_all()})
         elif p.path == "/health":
+            s = self.db.stats()
+            s["dns"] = {"total": self.dns_db.count(), "recent": self.dns_db.count_recent()}
             self._json({"status": "ok", "clients": self.registry.count(),
-                        "db": self.db.stats(), "time": int(time.time())})
+                        "db": s, "time": int(time.time())})
+        elif p.path == "/skin":
+            self._get_skin()
         elif p.path.startswith("/frontend/"):
             self._serve_static(p.path)
         else:
@@ -215,6 +219,8 @@ class Handler(BaseHTTPRequestHandler):
 
         if p.path == "/users":
             self._user_create()
+        elif p.path == "/skin":
+            self._set_skin()
         elif p.path == "/webhooks":
             self._webhook_create()
         elif p.path == "/alerts/bulk-status":
@@ -262,7 +268,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"deleted": self.db.clear_flows()})
         elif p.path == "/dns":
             if not self._require_role("admin"): return
-            self._json({"deleted": self.db.clear_dns()})
+            self._json({"deleted": self.dns_db.clear()})
         elif p.path.startswith("/users/"):
             try:   self._user_delete(int(p.path.split("/")[2]))
             except (ValueError, IndexError): self.send_error(400)
@@ -413,7 +419,7 @@ class Handler(BaseHTTPRequestHandler):
         limit = self._qs_int(qs, "limit", 5000,         1, 20000)
         fetch = {
             "flows": self.db.fetch_flows,
-            "dns":   self.db.fetch_dns,
+            "dns":   self.dns_db.fetch,
             "http":  self.db.fetch_http,
         }.get(table)
         if fetch is None:
@@ -555,3 +561,36 @@ class Handler(BaseHTTPRequestHandler):
                 break
 
         self.registry.remove(cid)
+
+    # ── Skin preference ───────────────────────────────────────────────────────
+
+    _VALID_SKINS = {"original", "chronicles", "mosaic", "seal"}
+
+    def _get_skin(self):
+        """GET /skin — return the server-stored skin preference for this session's user."""
+        s = self._session()
+        username = s["username"] if s else ""
+        key = f"skin:{username}" if username else "skin:default"
+        row = self.auth._conn().execute(
+            "SELECT value FROM auth WHERE key = ?", (key,)
+        ).fetchone()
+        skin = row[0] if row else "original"
+        self._json({"skin": skin})
+
+    def _set_skin(self):
+        """POST /skin {skin: id} — persist skin choice server-side (per user)."""
+        body, err = self._read_json()
+        if err: return
+        skin = str(body.get("skin", "original")).strip()
+        if skin not in self._VALID_SKINS:
+            self._json({"error": f"skin must be one of {sorted(self._VALID_SKINS)}"}, 400)
+            return
+        s = self._session()
+        username = s["username"] if s else ""
+        key = f"skin:{username}" if username else "skin:default"
+        c = self.auth._conn()
+        c.execute(
+            "INSERT OR REPLACE INTO auth (key, value) VALUES (?, ?)", (key, skin)
+        )
+        c.commit()
+        self._json({"skin": skin})

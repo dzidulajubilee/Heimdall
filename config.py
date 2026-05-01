@@ -10,6 +10,7 @@ DEFAULT_EVE       = "/var/log/suricata/eve.json"
 DEFAULT_PORT      = 8765
 DEFAULT_HOST      = "0.0.0.0"
 DEFAULT_DB        = Path(__file__).parent / "events.db"   # high-volume event store
+DEFAULT_DNS_DB    = Path(__file__).parent / "dns.db"       # dedicated DNS event store
 DEFAULT_CONFIG_DB = Path(__file__).parent / "config.db"   # low-write config store
 
 # ── Data retention ────────────────────────────────────────────────────────────
