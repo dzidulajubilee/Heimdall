@@ -1022,9 +1022,14 @@ function SettingsView({ theme, setTheme, role, username, onLogout }) {
         <div className="settings-card-header"><span className="settings-card-title">Data management</span></div>
         <div className="settings-card-body">
           {[{label:'Alerts',ep:'/alerts',count:health?.db?.alerts?.total??0},{label:'Flows',ep:'/flows',count:health?.db?.flows?.total??0},{label:'DNS events',ep:'/dns',count:health?.db?.dns?.total??0}].map(row=>(
-            <div key={row.label} className="data-mgmt-row">
-              <div><div className="data-mgmt-label">{row.label}</div><div className="data-mgmt-sub">{row.count.toLocaleString()} records</div></div>
-              <button className="btn danger sm" onClick={()=>confirmClearData(row.ep,row.label.toLowerCase(),row.count)}>Clear all</button>
+            <div key={row.label} className="data-action-row">
+              <div><div className="data-action-info">{row.label}</div><div className="data-action-sub">{row.count.toLocaleString()} records</div></div>
+              <button className="btn-clear" onClick={()=>confirmClearData(row.ep,row.label.toLowerCase(),row.count)}>
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/>
+                </svg>
+                Clear all
+              </button>
             </div>
           ))}
         </div>
