@@ -284,11 +284,13 @@ class Handler(BaseHTTPRequestHandler):
     # ── Static files ──────────────────────────────────────────────────────────
 
     _MIME = {
-        ".html": "text/html; charset=utf-8",
-        ".js":   "application/javascript",
-        ".jsx":  "application/javascript",
-        ".css":  "text/css",
-        ".ico":  "image/x-icon",
+        ".html":  "text/html; charset=utf-8",
+        ".js":    "application/javascript",
+        ".jsx":   "application/javascript",
+        ".css":   "text/css",
+        ".ico":   "image/x-icon",
+        ".woff2": "font/woff2",
+        ".woff":  "font/woff",
     }
 
     def _serve_static(self, url_path: str):
@@ -300,7 +302,11 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(403); return
         suffix = target.suffix.lower()
         ctype  = self._MIME.get(suffix, "application/octet-stream")
-        self._file(target, ctype, no_cache=suffix in (".html", ".jsx"))
+        # Fonts are immutable — cache aggressively; HTML/JSX never cache
+        if suffix in (".woff2", ".woff"):
+            self._file(target, ctype, cache_forever=True)
+        else:
+            self._file(target, ctype, no_cache=suffix in (".html", ".jsx"))
 
     # ── Auth ─────────────────────────────────────────────────────────────────
 
