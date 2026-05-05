@@ -490,3 +490,15 @@ class AlertDB:
             "http":   {"total": _cnt("http_events"),  "recent": _recent("http_events")},
             "oldest": oldest,
         }
+
+    def top_sids(self, limit: int = 50) -> list[dict]:
+        """Return the most-fired SIDs — used by ThreatIntelDB.coverage_gaps."""
+        rows = self._conn().execute(
+            """SELECT sig_id, MAX(sig_msg) as sig_msg, COUNT(*) as count
+               FROM alerts
+               WHERE sig_id IS NOT NULL AND sig_id != 0
+               GROUP BY sig_id ORDER BY count DESC LIMIT ?""",
+            (limit,),
+        ).fetchall()
+        return [{"sig_id": r["sig_id"], "sig_msg": r["sig_msg"],
+                 "count": r["count"]} for r in rows]

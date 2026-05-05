@@ -19,6 +19,8 @@ VALID_STATUSES  = {"acknowledged", "investigating", "closed"}
 _MAX_DELETE_IDS = 500   # mirrors database._MAX_DELETE_IDS
 
 
+import ai_explain as _ai
+
 class Handler(BaseHTTPRequestHandler):
 
     db       = None
@@ -26,6 +28,9 @@ class Handler(BaseHTTPRequestHandler):
     registry = None
     wdb      = None
     um       = None
+    ti_db    = None
+    sup_db   = None
+    ai_db    = None
 
     server_version = ""
     sys_version    = ""
@@ -78,7 +83,8 @@ class Handler(BaseHTTPRequestHandler):
             return True
         p = urlparse(self.path).path
         api_paths = ("/alerts", "/flows", "/dns", "/http", "/events",
-                     "/health", "/charts", "/webhooks", "/users", "/me")
+                     "/health", "/charts", "/webhooks", "/users", "/me",
+                     "/threat-intel", "/suppression", "/ai-config", "/ai-explain")
         if p.startswith("/frontend/") and p not in self._PUBLIC_FRONTEND:
             self._json({"error": "Unauthorized"}, 401)
         elif any(p.startswith(x) for x in api_paths):
@@ -198,6 +204,26 @@ class Handler(BaseHTTPRequestHandler):
         elif p.path == "/users":
             if not self._require_role("admin"): return
             self._json({"users": self.um.get_all()})
+        elif p.path == "/threat-intel":
+            self._json(self.ti_db.get_all())
+        elif p.path == "/threat-intel/lookup":
+            sid = qs.get("sig_id", [None])[0]
+            cat = qs.get("category", [None])[0]
+            self._json(self.ti_db.lookup(
+                sig_id=int(sid) if sid else None, category=cat) or {})
+        elif p.path == "/threat-intel/gaps":
+            top = self.db.top_sids(limit=200)
+            self._json(self.ti_db.coverage_gaps(top, limit=20))
+        elif p.path == "/suppression":
+            self._json(self.sup_db.get_all())
+        elif p.path == "/ai-config":
+            s = self.ai_db.get_settings()
+            # Never expose raw key to frontend
+            self._json({
+                "provider":    s["provider"],
+                "enabled":     s["enabled"],
+                "api_key_set": s["api_key_set"],
+            })
         elif p.path == "/health":
             s = self.db.stats()
             s["dns"] = {"total": self.dns_db.count(), "recent": self.dns_db.count_recent()}
@@ -221,6 +247,8 @@ class Handler(BaseHTTPRequestHandler):
             self._user_create()
         elif p.path == "/skin":
             self._set_skin()
+        elif p.path == "/ai-explain":
+            self._ai_explain()
         elif p.path == "/webhooks":
             self._webhook_create()
         elif p.path == "/alerts/bulk-status":
@@ -248,7 +276,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_PUT(self):
         if not self._require_auth(): return
         p = urlparse(self.path)
-        if p.path.startswith("/users/"):
+        if p.path == "/ai-config":
+            self._ai_config_update()
+        elif p.path.startswith("/users/"):
             try:   self._user_update(int(p.path.split("/")[2]))
             except (ValueError, IndexError): self.send_error(400)
         elif p.path.startswith("/webhooks/"):
@@ -284,13 +314,11 @@ class Handler(BaseHTTPRequestHandler):
     # ── Static files ──────────────────────────────────────────────────────────
 
     _MIME = {
-        ".html":  "text/html; charset=utf-8",
-        ".js":    "application/javascript",
-        ".jsx":   "application/javascript",
-        ".css":   "text/css",
-        ".ico":   "image/x-icon",
-        ".woff2": "font/woff2",
-        ".woff":  "font/woff",
+        ".html": "text/html; charset=utf-8",
+        ".js":   "application/javascript",
+        ".jsx":  "application/javascript",
+        ".css":  "text/css",
+        ".ico":  "image/x-icon",
     }
 
     def _serve_static(self, url_path: str):
@@ -302,11 +330,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(403); return
         suffix = target.suffix.lower()
         ctype  = self._MIME.get(suffix, "application/octet-stream")
-        # Fonts are immutable — cache aggressively; HTML/JSX never cache
-        if suffix in (".woff2", ".woff"):
-            self._file(target, ctype, cache_forever=True)
-        else:
-            self._file(target, ctype, no_cache=suffix in (".html", ".jsx"))
+        self._file(target, ctype, no_cache=suffix in (".html", ".jsx"))
 
     # ── Auth ─────────────────────────────────────────────────────────────────
 
@@ -600,3 +624,118 @@ class Handler(BaseHTTPRequestHandler):
         )
         c.commit()
         self._json({"skin": skin})
+
+    # ── AI Explanation ────────────────────────────────────────────────────────
+
+    def _ai_config_update(self):
+        """PUT /ai-config — update AI provider/key/enabled. Admin only."""
+        if not self._require_role("admin"): return
+        body, err = self._read_json()
+        if err: return
+        provider = body.get("provider")
+        api_key  = body.get("api_key")     # may be None (meaning "don't change")
+        enabled  = body.get("enabled")
+        if enabled is not None:
+            enabled = bool(enabled)
+        updated = self.ai_db.update_settings(
+            provider=provider,
+            api_key=api_key if api_key is not None else None,
+            enabled=enabled,
+        )
+        self._json(updated)
+
+    def _ai_explain(self):
+        """POST /ai-explain {alert:{...}} — generate executive summary via AI."""
+        body, err = self._read_json()
+        if err: return
+        alert = body.get("alert", {})
+        if not alert:
+            self._json({"error": "alert payload required"}, 400); return
+        settings = self.ai_db.get_settings()
+        if not settings["enabled"]:
+            self._json({"error": "AI explanation is disabled"}, 403); return
+        if not settings["api_key"]:
+            self._json({"error": "No API key configured"}, 400); return
+        try:
+            text = _ai.fetch_explanation(
+                alert    = alert,
+                provider = settings["provider"],
+                api_key  = settings["api_key"],
+            )
+            self._json({"explanation": text})
+        except Exception as exc:
+            log.warning("AI explain error: %s", exc)
+            self._json({"error": str(exc)}, 502)
+
+    # ── Threat Intel ──────────────────────────────────────────────────────────
+
+    def _ti_create(self):
+        if not self._require_role('admin', 'analyst'): return
+        body = self._read_json()
+        if body is None: return
+        explanation = str(body.get('explanation', '')).strip()
+        if not explanation:
+            self._json({'error': 'explanation is required'}, 400); return
+        sig_id   = body.get('sig_id')
+        category = str(body.get('category', '')).strip() or None
+        if not sig_id and not category:
+            self._json({'error': 'Either sig_id or category is required'}, 400); return
+        s = self._session()
+        self._json(self.ti_db.create(
+            sig_id=sig_id, sig_msg=str(body.get('sig_msg','')).strip() or None,
+            category=category, explanation=explanation,
+            tags=body.get('tags',[]), refs=body.get('refs',[]),
+            created_by=s['username'] if s else ''), 201)
+
+    def _ti_update(self, tid):
+        if not self._require_role('admin', 'analyst'): return
+        if not self.ti_db.get_by_id(tid):
+            self._json({'error': 'Not found'}, 404); return
+        body = self._read_json()
+        if body is None: return
+        self._json(self.ti_db.update(tid, **body))
+
+    def _ti_delete(self, tid):
+        if not self._require_role('admin'): return
+        if not self.ti_db.get_by_id(tid):
+            self._json({'error': 'Not found'}, 404); return
+        self.ti_db.delete(tid)
+        self._json({'deleted': tid})
+
+    # ── Suppression ───────────────────────────────────────────────────────────
+
+    def _sup_create(self):
+        if not self._require_role('admin'): return
+        body = self._read_json()
+        if body is None: return
+        name     = str(body.get('name', '')).strip()
+        sig_id   = body.get('sig_id')
+        src_ip   = str(body.get('src_ip',   '')).strip() or None
+        category = str(body.get('category', '')).strip() or None
+        if not name:
+            self._json({'error': 'name is required'}, 400); return
+        if not sig_id and not src_ip and not category:
+            self._json({'error': 'At least one of sig_id, src_ip, or category is required'}, 400)
+            return
+        s = self._session()
+        self._json(self.sup_db.create(
+            name=name, sig_id=sig_id, src_ip=src_ip, category=category,
+            reason=str(body.get('reason','')).strip() or None,
+            expires_at=body.get('expires_at'),
+            created_by=s['username'] if s else ''), 201)
+
+    def _sup_update(self, rule_id):
+        if not self._require_role('admin'): return
+        if not self.sup_db.get_by_id(rule_id):
+            self._json({'error': 'Not found'}, 404); return
+        body = self._read_json()
+        if body is None: return
+        self._json(self.sup_db.update(rule_id, **body))
+
+    def _sup_delete(self, rule_id):
+        if not self._require_role('admin'): return
+        if not self.sup_db.get_by_id(rule_id):
+            self._json({'error': 'Not found'}, 404); return
+        self.sup_db.delete(rule_id)
+        self._json({'deleted': rule_id})
+

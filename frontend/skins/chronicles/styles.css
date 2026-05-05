@@ -1,3 +1,4 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 html,body,#root{height:100%}
 
@@ -467,3 +468,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--tx1);font-size:12p
 .ar-triage.ack{background:var(--accent-bg);color:var(--accent)}
 .ar-triage.inv{background:var(--sev-medium-bg);color:var(--sev-medium)}
 .ar-triage.clo{background:var(--success-bg);color:var(--success)}
+
+
+/* AI spinner */
+@keyframes spin { to { transform: rotate(360deg); } }

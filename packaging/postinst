@@ -1,0 +1,83 @@
+#!/bin/bash
+set -e
+
+case "$1" in
+  configure)
+    if ! id -u heimdall >/dev/null 2>&1; then
+      adduser --system --group --no-create-home \
+              --home /var/lib/heimdall \
+              --shell /usr/sbin/nologin \
+              --gecos "Heimdall IDS Dashboard" \
+              heimdall
+      echo "Created system user: heimdall"
+    fi
+
+    if getent group suricata >/dev/null 2>&1; then
+      usermod -aG suricata heimdall
+      echo "Added heimdall to suricata group (eve.json access granted)."
+    else
+      echo "Note: suricata group not found. After installing Suricata run:"
+      echo "      usermod -aG suricata heimdall && systemctl restart heimdall"
+    fi
+
+    mkdir -p /var/lib/heimdall /var/log/heimdall /etc/heimdall
+
+    chown -R root:heimdall /opt/heimdall
+    chmod -R o-rwx /opt/heimdall
+    chmod 755 /opt/heimdall
+
+    chown heimdall:heimdall /var/lib/heimdall && chmod 750 /var/lib/heimdall
+    chown heimdall:heimdall /var/log/heimdall && chmod 750 /var/log/heimdall
+    chown root:heimdall /etc/heimdall && chmod 750 /etc/heimdall
+
+    if [ -f /etc/heimdall/heimdall.conf ]; then
+      chown root:heimdall /etc/heimdall/heimdall.conf
+      chmod 640 /etc/heimdall/heimdall.conf
+    fi
+
+    chmod 755 /usr/bin/heimdall 2>/dev/null || true
+
+    # ── Generate admin password on first install ───────────────────────────
+    CRED_FILE="/etc/heimdall/.credentials"
+    if [ ! -f "$CRED_FILE" ]; then
+      ADMIN_PW=$(python3 -c "import secrets; print(secrets.token_urlsafe(14))")
+
+      # Initialise the config database with this password
+      python3 /opt/heimdall/server.py --password "$ADMIN_PW" >/dev/null 2>&1 || true
+      chown -R heimdall:heimdall /var/lib/heimdall 2>/dev/null || true
+      chmod 750 /var/lib/heimdall 2>/dev/null || true
+
+      # Store credentials (root:heimdall, mode 640)
+      printf "username=admin\npassword=%s\n" "$ADMIN_PW" > "$CRED_FILE"
+      chown root:heimdall "$CRED_FILE"
+      chmod 640 "$CRED_FILE"
+    else
+      ADMIN_PW=$(grep '^password=' "$CRED_FILE" | cut -d= -f2-)
+    fi
+
+    systemctl daemon-reload 2>/dev/null || true
+    systemctl enable heimdall.service 2>/dev/null || true
+
+    if systemctl is-active --quiet heimdall.service 2>/dev/null; then
+      systemctl restart heimdall.service && echo "Restarted heimdall service."
+    else
+      systemctl start heimdall.service 2>/dev/null || true
+      echo "Started heimdall service."
+    fi
+
+    echo ""
+    echo "╔══════════════════════════════════════════════╗"
+    echo "║      Heimdall IDS — Admin Credentials        ║"
+    echo "╠══════════════════════════════════════════════╣"
+    echo "║  Username : admin                            ║"
+    printf "║  Password : %-33s║\n" "$ADMIN_PW"
+    echo "║  URL      : http://localhost:8765/           ║"
+    echo "╚══════════════════════════════════════════════╝"
+    echo ""
+    echo "  Credentials saved at: /etc/heimdall/.credentials"
+    echo "  Change password:      sudo heimdall --password <new>"
+    echo ""
+    ;;
+esac
+
+exit 0

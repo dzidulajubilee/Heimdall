@@ -1,6 +1,6 @@
 Package: heimdall-ids
 Version: 3.0.1
-Architecture: amd64
+Architecture: all
 Maintainer: Heimdall IDS <heimdall@localhost>
 Depends: python3 (>= 3.10)
 Section: net

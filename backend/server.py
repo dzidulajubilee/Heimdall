@@ -41,7 +41,10 @@ from handlers  import Handler
 from registry  import Registry
 from tail      import purge_thread, tail_thread
 from users     import UserManager
-from webhooks  import WebhookDB, delivery_worker
+from webhooks      import WebhookDB, delivery_worker
+from threat_intel  import ThreatIntelDB
+from suppression   import SuppressionDB
+from ai_explain    import AIExplainDB
 
 logging.basicConfig(
     level=logging.INFO,
@@ -106,18 +109,22 @@ def main():
     if not auth.get_hash():
         pw = secrets.token_urlsafe(14)
         auth.set_password(pw)
-        log.info("=" * 58)
-        log.info("  No password set — generated a random one:")
-        log.info("  USERNAME: admin")
-        log.info("  PASSWORD: %s", pw)
-        log.info("  Change:   python3 server.py --password <new>")
-        log.info("=" * 58)
+        log.info("=" * 60)
+        log.info("  HEIMDALL INITIAL CREDENTIALS")
+        log.info("  Username : admin")
+        log.info("  PASSWORD : %s", pw)
+        log.info("  URL      : http://localhost:8765/")
+        log.info("  Change password via: heimdall --password <new>")
+        log.info("=" * 60)
 
     # ── Registry ──────────────────────────────────────────────────────────────
     registry = Registry()
 
     # ── Webhook DB (uses config db) ───────────────────────────────────────────
     wdb = WebhookDB(conn_fn=cfg_db._conn)
+    ti_db  = ThreatIntelDB(conn_fn=cfg_db._conn)
+    sup_db = SuppressionDB(conn_fn=cfg_db._conn)
+    ai_db  = AIExplainDB(conn_fn=cfg_db._conn)
 
     # ── User manager (RBAC, uses config db) ──────────────────────────────────
     um = UserManager(conn_fn=cfg_db._conn)
@@ -138,6 +145,9 @@ def main():
     Handler.registry = registry
     Handler.wdb      = wdb
     Handler.um       = um
+    Handler.ti_db    = ti_db
+    Handler.sup_db   = sup_db
+    Handler.ai_db    = ai_db
 
     # ── Log DB state ──────────────────────────────────────────────────────────
     s = db.stats()

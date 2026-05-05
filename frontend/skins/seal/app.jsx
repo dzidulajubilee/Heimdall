@@ -183,7 +183,7 @@ function TrendStrip({ data }) {
 }
 
 // ── Inline detail (expands below each row) ────────────────────────────────────
-function InlineDetail({ alert:a, role }) {
+function InlineDetail({ alert:a, role, onExplain }) {
   const [meta,    setMeta]    = useState(null);
   const [newNote, setNewNote] = useState('');
   const [saving,  setSaving]  = useState(false);
@@ -297,12 +297,31 @@ function InlineDetail({ alert:a, role }) {
           </div>
         )}
       </div>
+      {/* Threat Intel column */}
+      <div className="id-col" style={{justifyContent:'flex-start',paddingTop:2}}>
+        <div className="id-section-title">Threat Intel</div>
+        {onExplain && (
+          <button onClick={()=>onExplain(a)}
+            style={{display:'flex',alignItems:'center',gap:6,padding:'6px 12px',marginTop:4,
+                    border:'1px solid var(--accent)',borderRadius:'var(--radius-sm,4px)',
+                    background:'transparent',color:'var(--accent)',
+                    fontFamily:'var(--mono)',fontSize:11,cursor:'pointer',letterSpacing:'.05em'}}>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" strokeWidth="2">
+              <circle cx="12" cy="12" r="10"/>
+              <line x1="12" y1="8" x2="12" y2="12"/>
+              <line x1="12" y1="16" x2="12.01" y2="16"/>
+            </svg>
+            EXPLAIN
+          </button>
+        )}
+      </div>
     </div>
   );
 }
 
 // ── Alert row ─────────────────────────────────────────────────────────────────
-function AlertRow({ alert:a, expanded, onToggle, role, selected, onSelect }) {
+function AlertRow({ alert:a, expanded, onToggle, role, selected, onSelect, onExplain }) {
   const m = SEV_META[a.severity]||SEV_META.info;
   const canTriage = role==='admin'||role==='analyst';
   const sCls = a.status==='acknowledged'?'ack':a.status==='investigating'?'inv':a.status==='closed'?'clo':'';
@@ -323,7 +342,7 @@ function AlertRow({ alert:a, expanded, onToggle, role, selected, onSelect }) {
         <div className="ar-net">{a.src_ip}:{a.src_port} → {a.dst_ip}:{a.dst_port}</div>
         <div className="ar-status-cell">{a.status&&<span className={`ar-status ${sCls}`}>{a.status}</span>}</div>
       </div>
-      {expanded && <InlineDetail alert={a} role={role}/>}
+      {expanded && <InlineDetail alert={a} role={role} onExplain={onExplain}/>}
     </div>
   );
 }
@@ -372,7 +391,7 @@ function BulkTriageBar({ selectedIds, alerts, onAction, onClear }) {
 }
 
 // ── Alert table ───────────────────────────────────────────────────────────────
-function AlertTable({ alerts, svFilter, setSvFilter, search, setSearch, role, setAlerts }) {
+function AlertTable({ alerts, svFilter, setSvFilter, search, setSearch, role, setAlerts, onExplain }) {
   const [expandedId,     setExpandedId]     = useState(null);
   const [showUnreviewed, setShowUnreviewed] = useState(false);
   const [selectedIds,    setSelectedIds]    = useState(new Set());
@@ -461,7 +480,8 @@ function AlertTable({ alerts, svFilter, setSvFilter, search, setSearch, role, se
                     onToggle={()=>setExpandedId(a.id===expandedId?null:a.id)}
                     role={role}
                     selected={selectedIds.has(a.id)}
-                    onSelect={toggleSelect}/>
+                    onSelect={toggleSelect}
+                    onExplain={onExplain}/>
         ))}
       </div>
       {canTriage && (
@@ -943,6 +963,1462 @@ function SettingsView({ theme, setTheme, role, username, onLogout }) {
 }
 
 // ── Root App ──────────────────────────────────────────────────────────────────
+
+// ══════════════════════════════════════════════════════════════════════════════
+// THREAT INTEL — shared across all skins
+function ExplainDialog({ alert: a, role, onClose, aiEnabled, aiExplanation, onRequestAiExplain }) {
+  const [intel,    setIntel]   = useState(null);
+  const [loading,  setLoading] = useState(true);
+  const [editing,  setEditing] = useState(false);
+  const [tab,      setTab]     = useState(aiEnabled ? 'ai' : 'intel');
+  const canWrite = role === 'admin' || role === 'analyst';
+
+  useEffect(() => {
+    if (!a) return;
+    setLoading(true); setIntel(null); setEditing(false);
+    fetch(`/threat-intel/lookup?sig_id=${encodeURIComponent(a.sig_id||'')}` +
+          `&category=${encodeURIComponent(a.category||'')}`)
+      .then(r => r.json())
+      .then(d => { setIntel(d && d.id ? d : null); setLoading(false); })
+      .catch(() => { setIntel(null); setLoading(false); });
+    // Trigger AI fetch on open if AI enabled and not yet fetched
+    if (aiEnabled && onRequestAiExplain && !aiExplanation) {
+      onRequestAiExplain(a);
+    }
+  }, [a?.sig_id, a?.category]);
+
+  if (!a) return null;
+  const m = SEV_META[a.severity] || SEV_META.info;
+
+  const overlayStyle = {
+    position:'fixed', inset:0, background:'rgba(0,0,0,.65)',
+    display:'flex', alignItems:'center', justifyContent:'center',
+    zIndex:1000, padding:16,
+  };
+  const boxStyle = {
+    background:'var(--s1)', border:'1px solid var(--ln)',
+    borderRadius:'var(--radius-lg,10px)', width:560, maxWidth:'95vw',
+    maxHeight:'88vh', display:'flex', flexDirection:'column',
+    boxShadow:'0 24px 48px rgba(0,0,0,.4)',
+  };
+  const tabBtn = active => ({
+    padding:'4px 14px', border:'none', cursor:'pointer', fontSize:11,
+    fontFamily:'var(--mono)', borderRadius:'var(--radius-sm,4px)',
+    background: active ? 'var(--accent)' : 'transparent',
+    color: active ? 'white' : 'var(--tx3)',
+  });
+
+  return (
+    <div style={overlayStyle} onClick={e => e.target===e.currentTarget && onClose()}>
+      <div style={boxStyle}>
+        {/* Header */}
+        <div style={{ padding:'16px 20px', borderBottom:'1px solid var(--ln)',
+                      display:'flex', alignItems:'flex-start', gap:12, flexShrink:0 }}>
+          <div style={{ flex:1, minWidth:0 }}>
+            <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:6, flexWrap:'wrap' }}>
+              <span className="sev-badge" style={{ color:m.color, background:m.bg }}>{a.severity?.toUpperCase()}</span>
+              <span style={{ fontFamily:'var(--mono)', fontSize:11, color:'var(--tx3)' }}>SID {a.sig_id}</span>
+              {a.category && <span style={{ fontFamily:'var(--mono)', fontSize:11, color:'var(--tx3)' }}>{a.category}</span>}
+            </div>
+            <div style={{ fontSize:13, fontWeight:600, color:'var(--tx1)', lineHeight:1.4 }}>{a.sig_msg}</div>
+          </div>
+          <button onClick={onClose} style={{ background:'none', border:'none',
+            color:'var(--tx3)', cursor:'pointer', padding:4, flexShrink:0, fontSize:18, lineHeight:1 }}>×</button>
+        </div>
+
+        {/* Tab bar */}
+        <div style={{ display:'flex', gap:2, padding:'8px 20px',
+                      borderBottom:'1px solid var(--ln)', background:'var(--s2)', flexShrink:0 }}>
+          <div style={{ display:'flex', gap:2, background:'var(--s3)',
+                        border:'1px solid var(--ln)', borderRadius:'var(--radius-sm,4px)', padding:2 }}>
+            <button style={tabBtn(tab==='intel')} onClick={()=>setTab('intel')}>Threat Intel</button>
+            {aiEnabled && (
+              <button style={tabBtn(tab==='ai')} onClick={()=>{ setTab('ai'); if(onRequestAiExplain && !aiExplanation) onRequestAiExplain(a); }}>
+                AI Summary
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Body */}
+        <div style={{ flex:1, overflowY:'auto', padding:'18px 20px' }}>
+          {tab === 'intel' && (
+            <>
+              {loading && (
+                <div style={{ textAlign:'center', padding:'32px 0', color:'var(--tx3)',
+                              fontFamily:'var(--mono)', fontSize:12 }}>Looking up intel…</div>
+              )}
+              {!loading && intel && !editing && (
+                <TIReadView intel={intel} alert={a} role={role} onEdit={() => setEditing(true)} />
+              )}
+              {!loading && !intel && !editing && (
+                <TIEmptyView alert={a} canWrite={canWrite} onAdd={() => setEditing(true)} />
+              )}
+              {!loading && editing && (
+                <TIEditForm
+                  alert={a} existing={intel} role={role}
+                  onSaved={d => { setIntel(d); setEditing(false); }}
+                  onCancel={() => setEditing(false)}
+                />
+              )}
+            </>
+          )}
+
+          {tab === 'ai' && aiEnabled && (
+            <AIExplanationPanel
+              alert={a}
+              aiExplanation={aiExplanation}
+              onRequest={() => onRequestAiExplain && onRequestAiExplain(a)}
+            />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+function AIExplanationPanel({ alert: a, aiExplanation, onRequest }) {
+  const hasResult  = aiExplanation && aiExplanation.text;
+  const isLoading  = aiExplanation && aiExplanation.loading;
+  const hasError   = aiExplanation && aiExplanation.error;
+
+  return (
+    <div>
+      <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:14 }}>
+        <span style={{ fontSize:9, fontFamily:'var(--mono)', letterSpacing:'.07em',
+                       textTransform:'uppercase', padding:'2px 8px', borderRadius:20,
+                       background:'rgba(99,102,241,.1)', color:'var(--accent)',
+                       border:'1px solid rgba(99,102,241,.25)' }}>AI Executive Summary</span>
+        {!isLoading && (
+          <button onClick={onRequest} style={{ marginLeft:'auto', padding:'2px 10px',
+            border:'1px solid var(--ln)', borderRadius:'var(--radius-sm,4px)',
+            background:'transparent', color:'var(--tx2)', fontSize:11, cursor:'pointer' }}>
+            {hasResult ? '↻ Refresh' : 'Generate'}
+          </button>
+        )}
+      </div>
+
+      {isLoading && (
+        <div style={{ display:'flex', alignItems:'center', gap:10, padding:'24px 0',
+                      color:'var(--tx3)', fontFamily:'var(--mono)', fontSize:12 }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               strokeWidth="2" style={{ animation:'spin 1s linear infinite' }}>
+            <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+          </svg>
+          Generating executive summary…
+        </div>
+      )}
+
+      {!isLoading && hasError && (
+        <div style={{ padding:'12px 14px', fontSize:12, lineHeight:1.65,
+                      background:'rgba(240,84,84,.08)', border:'1px solid rgba(240,84,84,.25)',
+                      borderRadius:'var(--radius-md,6px)', color:'var(--danger,#f05454)' }}>
+          {aiExplanation.error}
+        </div>
+      )}
+
+      {!isLoading && hasResult && (
+        <div style={{ fontSize:13, color:'var(--tx1)', lineHeight:1.8, whiteSpace:'pre-wrap',
+                      background:'var(--s2)', border:'1px solid var(--ln)',
+                      borderRadius:'var(--radius-md,6px)', padding:'14px 16px' }}>
+          {aiExplanation.text}
+        </div>
+      )}
+
+      {!isLoading && !hasResult && !hasError && (
+        <div style={{ textAlign:'center', padding:'32px 0', color:'var(--tx3)' }}>
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               strokeWidth="1" style={{ marginBottom:10, opacity:.3 }}>
+            <circle cx="12" cy="12" r="10"/>
+            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+          </svg>
+          <div style={{ fontSize:13, marginBottom:6 }}>No AI summary yet</div>
+          <div style={{ fontSize:11, color:'var(--tx3)' }}>Click Generate to create an executive summary</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TIReadView({ intel, alert: a, role, onEdit }) {
+  const matchLabel = intel.sig_id === a.sig_id ? 'Exact SID match' : 'Category match';
+  const fmtDate = ts => new Date(ts*1000).toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'});
+  return (
+    <div>
+      <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:14 }}>
+        <span style={{ fontSize:9, fontFamily:'var(--mono)', letterSpacing:'.07em',
+                       textTransform:'uppercase', padding:'2px 8px', borderRadius:20,
+                       background:'var(--success-bg,rgba(76,175,130,.12))',
+                       color:'var(--success,#4caf82)', border:'1px solid var(--success,#4caf82)' }}>
+          {matchLabel}
+        </span>
+        <span style={{ fontSize:10, color:'var(--tx3)', fontFamily:'var(--mono)' }}>
+          {intel.created_by||'system'} · {fmtDate(intel.updated_at)}
+        </span>
+        {(role==='admin'||role==='analyst') && (
+          <button onClick={onEdit} style={{ marginLeft:'auto', padding:'2px 10px',
+            border:'1px solid var(--ln)', borderRadius:'var(--radius-sm,4px)',
+            background:'transparent', color:'var(--tx2)', fontSize:11, cursor:'pointer' }}>Edit</button>
+        )}
+      </div>
+      <div style={{ fontSize:13, color:'var(--tx1)', lineHeight:1.75, whiteSpace:'pre-wrap',
+                    background:'var(--s2)', border:'1px solid var(--ln)',
+                    borderRadius:'var(--radius-md,6px)', padding:'12px 14px', marginBottom:14 }}>
+        {intel.explanation}
+      </div>
+      {intel.tags?.length > 0 && (
+        <div style={{ marginBottom:12 }}>
+          <div style={{ fontSize:9, fontFamily:'var(--mono)', textTransform:'uppercase',
+                        letterSpacing:'.09em', color:'var(--tx3)', marginBottom:6 }}>Tags</div>
+          <div style={{ display:'flex', flexWrap:'wrap', gap:5 }}>
+            {intel.tags.map(t => (
+              <span key={t} style={{ padding:'2px 9px', borderRadius:20, fontSize:11,
+                background:'var(--s3)', border:'1px solid var(--ln)',
+                color:'var(--tx2)', fontFamily:'var(--mono)' }}>{t}</span>
+            ))}
+          </div>
+        </div>
+      )}
+      {intel.refs?.length > 0 && (
+        <div>
+          <div style={{ fontSize:9, fontFamily:'var(--mono)', textTransform:'uppercase',
+                        letterSpacing:'.09em', color:'var(--tx3)', marginBottom:6 }}>References</div>
+          {intel.refs.map((r,i) => (
+            <div key={i} style={{ marginBottom:3 }}>
+              <a href={r.startsWith('http')?r:`https://${r}`} target="_blank" rel="noopener noreferrer"
+                 style={{ fontSize:11, color:'var(--accent)', fontFamily:'var(--mono)', wordBreak:'break-all' }}>{r}</a>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TIEmptyView({ alert: a, canWrite, onAdd }) {
+  return (
+    <div style={{ textAlign:'center', padding:'24px 0' }}>
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--tx3)"
+           strokeWidth="1" style={{ marginBottom:12, opacity:.4 }}>
+        <circle cx="12" cy="12" r="10"/>
+        <line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+      </svg>
+      <div style={{ fontSize:13, fontWeight:500, color:'var(--tx2)', marginBottom:6 }}>No explanation yet</div>
+      <div style={{ fontSize:12, color:'var(--tx3)', marginBottom:20, lineHeight:1.6 }}>
+        SID {a.sig_id} · {a.category||'Uncategorized'}<br/>
+        Add an explanation to help analysts understand this alert.
+      </div>
+      {canWrite && (
+        <button onClick={onAdd} style={{ padding:'7px 20px',
+          border:'1px solid var(--accent)', borderRadius:'var(--radius-sm,4px)',
+          background:'transparent', color:'var(--accent)', fontSize:12, cursor:'pointer' }}>
+          + Add Explanation
+        </button>
+      )}
+    </div>
+  );
+}
+
+function TIEditForm({ alert: a, existing, role, onSaved, onCancel }) {
+  const [scope,       setScope]       = useState(existing?.sig_id ? 'sid' : 'category');
+  const [explanation, setExplanation] = useState(existing?.explanation || '');
+  const [tagInput,    setTagInput]    = useState('');
+  const [tags,        setTags]        = useState(existing?.tags || []);
+  const [refInput,    setRefInput]    = useState('');
+  const [refs,        setRefs]        = useState(existing?.refs || []);
+  const [saving,      setSaving]      = useState(false);
+  const [err,         setErr]         = useState('');
+
+  function addTag() { const t=tagInput.trim(); if(t&&!tags.includes(t)) setTags(p=>[...p,t]); setTagInput(''); }
+  function addRef() { const r=refInput.trim(); if(r&&!refs.includes(r)) setRefs(p=>[...p,r]); setRefInput(''); }
+
+  async function save() {
+    if (!explanation.trim()) { setErr('Explanation is required'); return; }
+    setSaving(true); setErr('');
+    const body = {
+      explanation: explanation.trim(), tags, refs,
+      sig_id:   scope==='sid'      ? a.sig_id   : null,
+      sig_msg:  scope==='sid'      ? a.sig_msg   : null,
+      category: scope==='category' ? a.category  : null,
+    };
+    const method   = existing?.id ? 'PUT'  : 'POST';
+    const endpoint = existing?.id ? `/threat-intel/${existing.id}` : '/threat-intel';
+    try {
+      const r = await fetch(endpoint, { method,
+        headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+      const d = await r.json();
+      if (!r.ok) { setErr(d.error||'Save failed'); return; }
+      onSaved(d);
+    } catch { setErr('Network error'); }
+    finally { setSaving(false); }
+  }
+
+  const inp = { width:'100%', padding:'7px 10px', background:'var(--s2)',
+    border:'1px solid var(--ln)', borderRadius:'var(--radius-sm,4px)',
+    color:'var(--tx1)', fontSize:12, fontFamily:'var(--sans,inherit)',
+    outline:'none', boxSizing:'border-box' };
+  const lbl = { fontSize:9, fontWeight:600, letterSpacing:'.09em', textTransform:'uppercase',
+    color:'var(--tx3)', display:'block', marginBottom:5 };
+
+  return (
+    <div>
+      {!existing && (
+        <div style={{ marginBottom:14 }}>
+          <label style={lbl}>Apply explanation to</label>
+          <div style={{ display:'flex', gap:8 }}>
+            {[{val:'sid',label:`SID ${a.sig_id} only`},{val:'category',label:`All "${a.category||'Uncategorized'}" alerts`}].map(opt => (
+              <button key={opt.val} onClick={() => setScope(opt.val)} style={{ flex:1, padding:'6px 10px',
+                border:`1px solid ${scope===opt.val?'var(--accent)':'var(--ln)'}`,
+                borderRadius:'var(--radius-sm,4px)', cursor:'pointer',
+                background: scope===opt.val?'rgba(var(--accent-rgb,79,156,249),.1)':'transparent',
+                color: scope===opt.val?'var(--accent)':'var(--tx2)', fontSize:11 }}>
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div style={{ marginBottom:12 }}>
+        <label style={lbl}>Explanation</label>
+        <textarea style={{ ...inp, minHeight:110, resize:'vertical', lineHeight:1.65 }}
+          placeholder="What does this alert mean? What triggered it? Typically malicious or benign?"
+          value={explanation} onChange={e => setExplanation(e.target.value)}/>
+      </div>
+
+      <div style={{ marginBottom:12 }}>
+        <label style={lbl}>Tags</label>
+        <div style={{ display:'flex', flexWrap:'wrap', gap:5, marginBottom:6 }}>
+          {tags.map(t => (
+            <span key={t} style={{ display:'inline-flex', alignItems:'center', gap:4,
+              padding:'2px 8px', borderRadius:20, fontSize:11,
+              background:'var(--s3)', border:'1px solid var(--ln)', color:'var(--tx2)', fontFamily:'var(--mono)' }}>
+              {t}
+              <span onClick={() => setTags(p=>p.filter(x=>x!==t))}
+                    style={{ cursor:'pointer', color:'var(--tx3)', marginLeft:2 }}>×</span>
+            </span>
+          ))}
+        </div>
+        <div style={{ display:'flex', gap:6 }}>
+          <input style={{ ...inp, flex:1 }} placeholder="e.g. lateral-movement, c2…"
+                 value={tagInput} onChange={e=>setTagInput(e.target.value)}
+                 onKeyDown={e=>{ if(e.key==='Enter'){e.preventDefault();addTag();} }}/>
+          <button onClick={addTag} style={{ padding:'6px 12px', border:'1px solid var(--ln)',
+            borderRadius:'var(--radius-sm,4px)', background:'transparent',
+            color:'var(--tx2)', fontSize:11, cursor:'pointer' }}>Add</button>
+        </div>
+      </div>
+
+      <div style={{ marginBottom:14 }}>
+        <label style={lbl}>References</label>
+        <div style={{ display:'flex', flexDirection:'column', gap:3, marginBottom:6 }}>
+          {refs.map(r => (
+            <div key={r} style={{ display:'flex', alignItems:'center', gap:8 }}>
+              <span style={{ flex:1, fontFamily:'var(--mono)', fontSize:11, color:'var(--accent)',
+                overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r}</span>
+              <span onClick={() => setRefs(p=>p.filter(x=>x!==r))}
+                    style={{ cursor:'pointer', color:'var(--tx3)', fontSize:13 }}>×</span>
+            </div>
+          ))}
+        </div>
+        <div style={{ display:'flex', gap:6 }}>
+          <input style={{ ...inp, flex:1, fontFamily:'var(--mono)', fontSize:11 }}
+                 placeholder="https://…"
+                 value={refInput} onChange={e=>setRefInput(e.target.value)}
+                 onKeyDown={e=>{ if(e.key==='Enter'){e.preventDefault();addRef();} }}/>
+          <button onClick={addRef} style={{ padding:'6px 12px', border:'1px solid var(--ln)',
+            borderRadius:'var(--radius-sm,4px)', background:'transparent',
+            color:'var(--tx2)', fontSize:11, cursor:'pointer' }}>Add</button>
+        </div>
+      </div>
+
+      {err && (
+        <div style={{ marginBottom:10, padding:'7px 10px', fontSize:12,
+          background:'rgba(240,84,84,.1)', border:'1px solid var(--danger,#f05454)',
+          borderRadius:'var(--radius-sm,4px)', color:'var(--danger,#f05454)' }}>{err}</div>
+      )}
+
+      <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
+        <button onClick={onCancel} disabled={saving} style={{ padding:'5px 14px',
+          border:'1px solid var(--ln)', borderRadius:'var(--radius-sm,4px)',
+          background:'transparent', color:'var(--tx2)', fontSize:12, cursor:'pointer' }}>Cancel</button>
+        <button onClick={save} disabled={saving} style={{ padding:'5px 18px',
+          border:'1px solid var(--accent)', borderRadius:'var(--radius-sm,4px)',
+          background:'transparent', color:'var(--accent)', fontSize:12,
+          cursor:saving?'wait':'pointer' }}>
+          {saving ? 'Saving…' : existing ? 'Save Changes' : 'Save Explanation'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── ThreatIntelView — full settings-style page ─────────────────────────────────
+function ThreatIntelView({ role }) {
+  const [entries,  setEntries]  = useState([]);
+  const [gaps,     setGaps]     = useState([]);
+  const [loading,  setLoading]  = useState(true);
+  const [tab,      setTab]      = useState('entries');
+  const [showForm, setShowForm] = useState(false);
+  const [editing,  setEditing]  = useState(null);
+  const [delId,    setDelId]    = useState(null);
+  const canWrite = role==='admin'||role==='analyst';
+
+  function load() {
+    setLoading(true);
+    Promise.all([
+      fetch('/threat-intel').then(r=>r.json()),
+      fetch('/threat-intel/gaps').then(r=>r.json()),
+    ]).then(([e,g]) => {
+      setEntries(Array.isArray(e)?e:[]);
+      setGaps(Array.isArray(g)?g:[]);
+      setLoading(false);
+    }).catch(()=>setLoading(false));
+  }
+  useEffect(()=>{ load(); },[]);
+
+  async function doDelete(id) {
+    await fetch(`/threat-intel/${id}`,{method:'DELETE'});
+    setDelId(null); load();
+  }
+
+  const fmtDate = ts => new Date(ts*1000).toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'});
+
+  const sectionStyle = { padding:'20px 24px', maxWidth:900 };
+  const cardStyle = { background:'var(--s1)', border:'1px solid var(--ln)',
+    borderRadius:'var(--radius-lg,10px)', padding:'14px 16px', marginBottom:10 };
+  const tabBtnStyle = active => ({
+    padding:'4px 14px', border:'none', cursor:'pointer', fontSize:11,
+    fontFamily:'var(--mono)', borderRadius:'var(--radius-sm,4px)',
+    background: active ? 'var(--accent)' : 'transparent',
+    color: active ? 'white' : 'var(--tx3)',
+  });
+
+  return (
+    <div style={{ overflowY:'auto', flex:1 }}>
+      {/* Sub-tab bar */}
+      <div style={{ display:'flex', alignItems:'center', gap:8, padding:'10px 24px',
+                    borderBottom:'1px solid var(--ln)', background:'var(--s1)', flexShrink:0 }}>
+        <div style={{ display:'flex', gap:2, background:'var(--s2)',
+                      border:'1px solid var(--ln)', borderRadius:'var(--radius-sm,4px)', padding:2 }}>
+          <button style={tabBtnStyle(tab==='entries')} onClick={()=>setTab('entries')}>
+            Explanations ({entries.length})
+          </button>
+          <button style={tabBtnStyle(tab==='gaps')} onClick={()=>setTab('gaps')}>
+            Coverage Gaps ({gaps.length})
+          </button>
+        </div>
+        {canWrite && tab==='entries' && (
+          <button onClick={()=>{ setEditing(null); setShowForm(true); }} style={{
+            marginLeft:'auto', padding:'5px 14px', cursor:'pointer',
+            border:'1px solid var(--accent)', borderRadius:'var(--radius-sm,4px)',
+            background:'transparent', color:'var(--accent)', fontSize:12 }}>
+            + Add Explanation
+          </button>
+        )}
+      </div>
+
+      <div style={sectionStyle}>
+        {/* Info banner */}
+        <div style={{ marginBottom:16, padding:'10px 14px', fontSize:12,
+                      color:'var(--tx2)', lineHeight:1.7,
+                      background:'rgba(99,102,241,.08)', borderRadius:'var(--radius-md,6px)',
+                      border:'1px solid rgba(99,102,241,.2)' }}>
+          <strong style={{ color:'var(--accent)' }}>Threat Intel</strong> explanations appear
+          when analysts click <strong style={{ color:'var(--tx1)' }}>Explain</strong> on any alert.
+          SID-specific entries take priority over category entries.
+        </div>
+
+        {loading && <div style={{ color:'var(--tx3)', fontFamily:'var(--mono)', fontSize:12 }}>Loading…</div>}
+
+        {/* Inline add/edit form */}
+        {showForm && tab==='entries' && (
+          <TIManualForm existing={editing} onSaved={()=>{ setShowForm(false); setEditing(null); load(); }}
+                        onCancel={()=>{ setShowForm(false); setEditing(null); }}/>
+        )}
+
+        {/* ── Explanations tab ── */}
+        {tab==='entries' && !loading && entries.length===0 && !showForm && (
+          <div style={{ textAlign:'center', padding:'40px 0', color:'var(--tx3)' }}>
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1"
+                 style={{ marginBottom:10, opacity:.3 }}>
+              <circle cx="12" cy="12" r="10"/>
+              <line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+            </svg>
+            <div style={{ fontSize:13 }}>No explanations yet</div>
+            <div style={{ fontSize:11, marginTop:4 }}>Add entries here or click Explain on any alert</div>
+          </div>
+        )}
+
+        {tab==='entries' && !loading && entries.map(e => (
+          <div key={e.id} style={{ ...cardStyle,
+            borderLeft:`3px solid ${e.sig_id?'var(--accent)':'var(--sev-info,#4f9cf9)'}` }}>
+            <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:8 }}>
+              <span style={{ fontSize:9, fontFamily:'var(--mono)', letterSpacing:'.07em',
+                textTransform:'uppercase', padding:'2px 7px', borderRadius:20,
+                background: e.sig_id?'rgba(79,156,249,.12)':'rgba(159,122,234,.15)',
+                color: e.sig_id?'var(--accent)':'var(--sev-info,#9f7aea)',
+                border:`1px solid ${e.sig_id?'rgba(79,156,249,.3)':'rgba(159,122,234,.3)'}` }}>
+                {e.sig_id ? `SID ${e.sig_id}` : 'Category'}
+              </span>
+              <span style={{ fontWeight:500, fontSize:13, color:'var(--tx1)' }}>
+                {e.sig_msg||e.category||'—'}
+              </span>
+              <span style={{ marginLeft:'auto', fontSize:10, fontFamily:'var(--mono)', color:'var(--tx3)' }}>
+                {fmtDate(e.updated_at)} · {e.created_by||'system'}
+              </span>
+            </div>
+            <div style={{ fontSize:12, color:'var(--tx2)', lineHeight:1.65, marginBottom:10,
+              overflow:'hidden', display:'-webkit-box', WebkitLineClamp:3, WebkitBoxOrient:'vertical' }}>
+              {e.explanation}
+            </div>
+            {e.tags?.length>0 && (
+              <div style={{ display:'flex', gap:5, flexWrap:'wrap', marginBottom:10 }}>
+                {e.tags.map(t=>(
+                  <span key={t} style={{ padding:'1px 7px', borderRadius:20, fontSize:10,
+                    background:'var(--s3)', border:'1px solid var(--ln)',
+                    color:'var(--tx3)', fontFamily:'var(--mono)' }}>{t}</span>
+                ))}
+              </div>
+            )}
+            {canWrite && (
+              <div style={{ display:'flex', gap:7 }}>
+                <button style={{ padding:'3px 10px', border:'1px solid var(--ln)',
+                  borderRadius:'var(--radius-sm,4px)', background:'transparent',
+                  color:'var(--tx2)', fontSize:11, cursor:'pointer' }}
+                  onClick={()=>{ setEditing(e); setShowForm(true); setTab('entries'); }}>Edit</button>
+                {role==='admin' && (
+                  <button style={{ padding:'3px 10px', border:'1px solid var(--danger,#f05454)',
+                    borderRadius:'var(--radius-sm,4px)', background:'transparent',
+                    color:'var(--danger,#f05454)', fontSize:11, cursor:'pointer' }}
+                    onClick={()=>setDelId(e.id)}>Delete</button>
+                )}
+              </div>
+            )}
+          </div>
+        ))}
+
+        {/* ── Coverage Gaps tab ── */}
+        {tab==='gaps' && !loading && (
+          <>
+            <div style={{ marginBottom:14, padding:'10px 14px', fontSize:12,
+              color:'var(--tx2)', lineHeight:1.7,
+              background:'rgba(245,200,66,.08)', borderRadius:'var(--radius-md,6px)',
+              border:'1px solid rgba(245,200,66,.2)' }}>
+              <strong style={{ color:'var(--sev-medium,#f5c842)' }}>Coverage Gaps</strong> — your most-fired
+              signatures with no explanation. Click <strong style={{ color:'var(--tx1)' }}>Add</strong> to document them.
+            </div>
+            {gaps.length===0 && (
+              <div style={{ textAlign:'center', padding:'40px 0', color:'var(--tx3)' }}>
+                <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1"
+                     style={{ marginBottom:10, opacity:.3 }}>
+                  <polyline points="20 6 9 17 4 12"/>
+                </svg>
+                <div style={{ fontSize:13 }}>Full coverage!</div>
+                <div style={{ fontSize:11, marginTop:4 }}>All top-firing SIDs have explanations</div>
+              </div>
+            )}
+            {gaps.map(g => (
+              <div key={g.sig_id} style={{ ...cardStyle, display:'flex', alignItems:'center', gap:12 }}>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontFamily:'var(--mono)', fontSize:11, color:'var(--tx3)', marginBottom:3 }}>
+                    SID {g.sig_id}
+                  </div>
+                  <div style={{ fontSize:12, color:'var(--tx1)', overflow:'hidden',
+                    textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{g.sig_msg}</div>
+                </div>
+                <div style={{ fontFamily:'var(--mono)', fontSize:11, color:'var(--sev-high,#f5944a)', whiteSpace:'nowrap' }}>
+                  {g.count?.toLocaleString()} fires
+                </div>
+                {canWrite && (
+                  <button onClick={()=>{ setEditing({_prefill:true,sig_id:g.sig_id,sig_msg:g.sig_msg});
+                                         setShowForm(true); setTab('entries'); }}
+                    style={{ padding:'4px 12px', border:'1px solid var(--accent)',
+                      borderRadius:'var(--radius-sm,4px)', background:'transparent',
+                      color:'var(--accent)', fontSize:11, cursor:'pointer', whiteSpace:'nowrap' }}>
+                    + Add
+                  </button>
+                )}
+              </div>
+            ))}
+          </>
+        )}
+      </div>
+
+      {/* Delete confirm */}
+      {delId!==null && (
+        <ConfirmDialog
+          title="Delete explanation?"
+          body="This will permanently remove the explanation."
+          confirmLabel="Delete"
+          variant="danger"
+          onConfirm={() => doDelete(delId)}
+          onClose={() => setDelId(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function TIManualForm({ existing, onSaved, onCancel }) {
+  const prefill = existing?._prefill;
+  const [sigId,       setSigId]       = useState(existing?.sig_id&&!prefill?String(existing.sig_id):prefill?String(existing.sig_id):'');
+  const [sigMsg,      setSigMsg]      = useState(existing?.sig_msg||'');
+  const [category,    setCategory]    = useState(existing?.category||'');
+  const [explanation, setExplanation] = useState(existing?.explanation||'');
+  const [tagInput,    setTagInput]    = useState('');
+  const [tags,        setTags]        = useState(existing?.tags||[]);
+  const [refInput,    setRefInput]    = useState('');
+  const [refs,        setRefs]        = useState(existing?.refs||[]);
+  const [saving,      setSaving]      = useState(false);
+  const [err,         setErr]         = useState('');
+  const isEdit = existing?.id && !prefill;
+
+  function addTag(){const t=tagInput.trim();if(t&&!tags.includes(t))setTags(p=>[...p,t]);setTagInput('');}
+  function addRef(){const r=refInput.trim();if(r&&!refs.includes(r))setRefs(p=>[...p,r]);setRefInput('');}
+
+  async function save() {
+    if (!explanation.trim()) { setErr('Explanation is required'); return; }
+    if (!sigId&&!category.trim()) { setErr('SID or Category is required'); return; }
+    setSaving(true); setErr('');
+    const body = { sig_id:sigId?parseInt(sigId):null, sig_msg:sigMsg.trim()||null,
+                   category:category.trim()||null, explanation:explanation.trim(), tags, refs };
+    const method   = isEdit?'PUT':'POST';
+    const endpoint = isEdit?`/threat-intel/${existing.id}`:'/threat-intel';
+    try {
+      const r = await fetch(endpoint,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      const d = await r.json();
+      if (!r.ok){setErr(d.error||'Save failed');return;}
+      onSaved(d);
+    } catch { setErr('Network error'); }
+    finally { setSaving(false); }
+  }
+
+  const inp = { width:'100%', padding:'7px 10px', background:'var(--s2)',
+    border:'1px solid var(--ln)', borderRadius:'var(--radius-sm,4px)',
+    color:'var(--tx1)', fontSize:12, fontFamily:'var(--sans,inherit)',
+    outline:'none', boxSizing:'border-box' };
+  const lbl = { fontSize:9, fontWeight:600, letterSpacing:'.09em', textTransform:'uppercase',
+    color:'var(--tx3)', display:'block', marginBottom:5 };
+
+  return (
+    <div style={{ background:'var(--s2)', border:'1px solid var(--ln)',
+      borderRadius:'var(--radius-lg,10px)', padding:18, marginBottom:18 }}>
+      <div style={{ fontSize:13, fontWeight:500, color:'var(--tx1)', marginBottom:14 }}>
+        {isEdit?'Edit Explanation':'New Explanation'}
+      </div>
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:12 }}>
+        <div><label style={lbl}>SID (optional)</label>
+          <input style={{ ...inp, fontFamily:'var(--mono)' }} type="number" placeholder="e.g. 2100498"
+                 value={sigId} onChange={e=>setSigId(e.target.value)}/></div>
+        <div><label style={lbl}>Category (optional)</label>
+          <input style={inp} placeholder="e.g. trojan-activity"
+                 value={category} onChange={e=>setCategory(e.target.value)}/></div>
+      </div>
+      <div style={{ marginBottom:12 }}>
+        <label style={lbl}>Signature name (optional)</label>
+        <input style={inp} placeholder="Human-readable name"
+               value={sigMsg} onChange={e=>setSigMsg(e.target.value)}/>
+      </div>
+      <div style={{ marginBottom:12 }}>
+        <label style={lbl}>Explanation</label>
+        <textarea style={{ ...inp, minHeight:90, resize:'vertical', lineHeight:1.65 }}
+          placeholder="What does this alert mean?"
+          value={explanation} onChange={e=>setExplanation(e.target.value)}/>
+      </div>
+      <div style={{ marginBottom:12 }}>
+        <label style={lbl}>Tags</label>
+        <div style={{ display:'flex', flexWrap:'wrap', gap:5, marginBottom:5 }}>
+          {tags.map(t=>(
+            <span key={t} style={{ display:'inline-flex',alignItems:'center',gap:4,
+              padding:'2px 8px',borderRadius:20,fontSize:11,
+              background:'var(--s3)',border:'1px solid var(--ln)',color:'var(--tx2)',fontFamily:'var(--mono)' }}>
+              {t}<span onClick={()=>setTags(p=>p.filter(x=>x!==t))} style={{ cursor:'pointer',color:'var(--tx3)' }}>×</span>
+            </span>
+          ))}
+        </div>
+        <div style={{ display:'flex',gap:6 }}>
+          <input style={{ ...inp,flex:1 }} placeholder="Add tag…" value={tagInput}
+                 onChange={e=>setTagInput(e.target.value)}
+                 onKeyDown={e=>{ if(e.key==='Enter'){e.preventDefault();addTag();} }}/>
+          <button onClick={addTag} style={{ padding:'6px 10px',border:'1px solid var(--ln)',
+            borderRadius:'var(--radius-sm,4px)',background:'transparent',color:'var(--tx2)',fontSize:11,cursor:'pointer' }}>Add</button>
+        </div>
+      </div>
+      <div style={{ marginBottom:14 }}>
+        <label style={lbl}>References</label>
+        <div style={{ display:'flex',flexDirection:'column',gap:3,marginBottom:5 }}>
+          {refs.map(r=>(
+            <div key={r} style={{ display:'flex',alignItems:'center',gap:8 }}>
+              <span style={{ flex:1,fontFamily:'var(--mono)',fontSize:11,color:'var(--accent)',
+                overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap' }}>{r}</span>
+              <span onClick={()=>setRefs(p=>p.filter(x=>x!==r))} style={{ cursor:'pointer',color:'var(--tx3)',fontSize:13 }}>×</span>
+            </div>
+          ))}
+        </div>
+        <div style={{ display:'flex',gap:6 }}>
+          <input style={{ ...inp,flex:1,fontFamily:'var(--mono)',fontSize:11 }} placeholder="https://…"
+                 value={refInput} onChange={e=>setRefInput(e.target.value)}
+                 onKeyDown={e=>{ if(e.key==='Enter'){e.preventDefault();addRef();} }}/>
+          <button onClick={addRef} style={{ padding:'6px 10px',border:'1px solid var(--ln)',
+            borderRadius:'var(--radius-sm,4px)',background:'transparent',color:'var(--tx2)',fontSize:11,cursor:'pointer' }}>Add</button>
+        </div>
+      </div>
+      {err && <div style={{ marginBottom:10,padding:'6px 10px',fontSize:12,
+        background:'rgba(240,84,84,.1)',border:'1px solid var(--danger,#f05454)',
+        borderRadius:'var(--radius-sm,4px)',color:'var(--danger,#f05454)' }}>{err}</div>}
+      <div style={{ display:'flex',gap:8,justifyContent:'flex-end' }}>
+        <button onClick={onCancel} disabled={saving} style={{ padding:'5px 14px',
+          border:'1px solid var(--ln)',borderRadius:'var(--radius-sm,4px)',
+          background:'transparent',color:'var(--tx2)',fontSize:12,cursor:'pointer' }}>Cancel</button>
+        <button onClick={save} disabled={saving} style={{ padding:'5px 18px',
+          border:'1px solid var(--accent)',borderRadius:'var(--radius-sm,4px)',
+          background:'transparent',color:'var(--accent)',fontSize:12,
+          cursor:saving?'wait':'pointer' }}>{saving?'Saving…':isEdit?'Save':'Create'}</button>
+      </div>
+    </div>
+  );
+}
+
+
+function TIReadView({ intel, alert: a, role, onEdit }) {
+  const matchLabel = intel.sig_id === a.sig_id ? 'Exact SID match' : 'Category match';
+  const fmtDate = ts => new Date(ts*1000).toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'});
+  return (
+    <div>
+      <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:14 }}>
+        <span style={{ fontSize:9, fontFamily:'var(--mono)', letterSpacing:'.07em',
+                       textTransform:'uppercase', padding:'2px 8px', borderRadius:20,
+                       background:'var(--success-bg,rgba(76,175,130,.12))',
+                       color:'var(--success,#4caf82)', border:'1px solid var(--success,#4caf82)' }}>
+          {matchLabel}
+        </span>
+        <span style={{ fontSize:10, color:'var(--tx3)', fontFamily:'var(--mono)' }}>
+          {intel.created_by||'system'} · {fmtDate(intel.updated_at)}
+        </span>
+        {(role==='admin'||role==='analyst') && (
+          <button onClick={onEdit} style={{ marginLeft:'auto', padding:'2px 10px',
+            border:'1px solid var(--ln)', borderRadius:'var(--radius-sm,4px)',
+            background:'transparent', color:'var(--tx2)', fontSize:11, cursor:'pointer' }}>Edit</button>
+        )}
+      </div>
+      <div style={{ fontSize:13, color:'var(--tx1)', lineHeight:1.75, whiteSpace:'pre-wrap',
+                    background:'var(--s2)', border:'1px solid var(--ln)',
+                    borderRadius:'var(--radius-md,6px)', padding:'12px 14px', marginBottom:14 }}>
+        {intel.explanation}
+      </div>
+      {intel.tags?.length > 0 && (
+        <div style={{ marginBottom:12 }}>
+          <div style={{ fontSize:9, fontFamily:'var(--mono)', textTransform:'uppercase',
+                        letterSpacing:'.09em', color:'var(--tx3)', marginBottom:6 }}>Tags</div>
+          <div style={{ display:'flex', flexWrap:'wrap', gap:5 }}>
+            {intel.tags.map(t => (
+              <span key={t} style={{ padding:'2px 9px', borderRadius:20, fontSize:11,
+                background:'var(--s3)', border:'1px solid var(--ln)',
+                color:'var(--tx2)', fontFamily:'var(--mono)' }}>{t}</span>
+            ))}
+          </div>
+        </div>
+      )}
+      {intel.refs?.length > 0 && (
+        <div>
+          <div style={{ fontSize:9, fontFamily:'var(--mono)', textTransform:'uppercase',
+                        letterSpacing:'.09em', color:'var(--tx3)', marginBottom:6 }}>References</div>
+          {intel.refs.map((r,i) => (
+            <div key={i} style={{ marginBottom:3 }}>
+              <a href={r.startsWith('http')?r:`https://${r}`} target="_blank" rel="noopener noreferrer"
+                 style={{ fontSize:11, color:'var(--accent)', fontFamily:'var(--mono)', wordBreak:'break-all' }}>{r}</a>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TIEmptyView({ alert: a, canWrite, onAdd }) {
+  return (
+    <div style={{ textAlign:'center', padding:'24px 0' }}>
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--tx3)"
+           strokeWidth="1" style={{ marginBottom:12, opacity:.4 }}>
+        <circle cx="12" cy="12" r="10"/>
+        <line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+      </svg>
+      <div style={{ fontSize:13, fontWeight:500, color:'var(--tx2)', marginBottom:6 }}>No explanation yet</div>
+      <div style={{ fontSize:12, color:'var(--tx3)', marginBottom:20, lineHeight:1.6 }}>
+        SID {a.sig_id} · {a.category||'Uncategorized'}<br/>
+        Add an explanation to help analysts understand this alert.
+      </div>
+      {canWrite && (
+        <button onClick={onAdd} style={{ padding:'7px 20px',
+          border:'1px solid var(--accent)', borderRadius:'var(--radius-sm,4px)',
+          background:'transparent', color:'var(--accent)', fontSize:12, cursor:'pointer' }}>
+          + Add Explanation
+        </button>
+      )}
+    </div>
+  );
+}
+
+function TIEditForm({ alert: a, existing, role, onSaved, onCancel }) {
+  const [scope,       setScope]       = useState(existing?.sig_id ? 'sid' : 'category');
+  const [explanation, setExplanation] = useState(existing?.explanation || '');
+  const [tagInput,    setTagInput]    = useState('');
+  const [tags,        setTags]        = useState(existing?.tags || []);
+  const [refInput,    setRefInput]    = useState('');
+  const [refs,        setRefs]        = useState(existing?.refs || []);
+  const [saving,      setSaving]      = useState(false);
+  const [err,         setErr]         = useState('');
+
+  function addTag() { const t=tagInput.trim(); if(t&&!tags.includes(t)) setTags(p=>[...p,t]); setTagInput(''); }
+  function addRef() { const r=refInput.trim(); if(r&&!refs.includes(r)) setRefs(p=>[...p,r]); setRefInput(''); }
+
+  async function save() {
+    if (!explanation.trim()) { setErr('Explanation is required'); return; }
+    setSaving(true); setErr('');
+    const body = {
+      explanation: explanation.trim(), tags, refs,
+      sig_id:   scope==='sid'      ? a.sig_id   : null,
+      sig_msg:  scope==='sid'      ? a.sig_msg   : null,
+      category: scope==='category' ? a.category  : null,
+    };
+    const method   = existing?.id ? 'PUT'  : 'POST';
+    const endpoint = existing?.id ? `/threat-intel/${existing.id}` : '/threat-intel';
+    try {
+      const r = await fetch(endpoint, { method,
+        headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+      const d = await r.json();
+      if (!r.ok) { setErr(d.error||'Save failed'); return; }
+      onSaved(d);
+    } catch { setErr('Network error'); }
+    finally { setSaving(false); }
+  }
+
+  const inp = { width:'100%', padding:'7px 10px', background:'var(--s2)',
+    border:'1px solid var(--ln)', borderRadius:'var(--radius-sm,4px)',
+    color:'var(--tx1)', fontSize:12, fontFamily:'var(--sans,inherit)',
+    outline:'none', boxSizing:'border-box' };
+  const lbl = { fontSize:9, fontWeight:600, letterSpacing:'.09em', textTransform:'uppercase',
+    color:'var(--tx3)', display:'block', marginBottom:5 };
+
+  return (
+    <div>
+      {!existing && (
+        <div style={{ marginBottom:14 }}>
+          <label style={lbl}>Apply explanation to</label>
+          <div style={{ display:'flex', gap:8 }}>
+            {[{val:'sid',label:`SID ${a.sig_id} only`},{val:'category',label:`All "${a.category||'Uncategorized'}" alerts`}].map(opt => (
+              <button key={opt.val} onClick={() => setScope(opt.val)} style={{ flex:1, padding:'6px 10px',
+                border:`1px solid ${scope===opt.val?'var(--accent)':'var(--ln)'}`,
+                borderRadius:'var(--radius-sm,4px)', cursor:'pointer',
+                background: scope===opt.val?'rgba(var(--accent-rgb,79,156,249),.1)':'transparent',
+                color: scope===opt.val?'var(--accent)':'var(--tx2)', fontSize:11 }}>
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div style={{ marginBottom:12 }}>
+        <label style={lbl}>Explanation</label>
+        <textarea style={{ ...inp, minHeight:110, resize:'vertical', lineHeight:1.65 }}
+          placeholder="What does this alert mean? What triggered it? Typically malicious or benign?"
+          value={explanation} onChange={e => setExplanation(e.target.value)}/>
+      </div>
+
+      <div style={{ marginBottom:12 }}>
+        <label style={lbl}>Tags</label>
+        <div style={{ display:'flex', flexWrap:'wrap', gap:5, marginBottom:6 }}>
+          {tags.map(t => (
+            <span key={t} style={{ display:'inline-flex', alignItems:'center', gap:4,
+              padding:'2px 8px', borderRadius:20, fontSize:11,
+              background:'var(--s3)', border:'1px solid var(--ln)', color:'var(--tx2)', fontFamily:'var(--mono)' }}>
+              {t}
+              <span onClick={() => setTags(p=>p.filter(x=>x!==t))}
+                    style={{ cursor:'pointer', color:'var(--tx3)', marginLeft:2 }}>×</span>
+            </span>
+          ))}
+        </div>
+        <div style={{ display:'flex', gap:6 }}>
+          <input style={{ ...inp, flex:1 }} placeholder="e.g. lateral-movement, c2…"
+                 value={tagInput} onChange={e=>setTagInput(e.target.value)}
+                 onKeyDown={e=>{ if(e.key==='Enter'){e.preventDefault();addTag();} }}/>
+          <button onClick={addTag} style={{ padding:'6px 12px', border:'1px solid var(--ln)',
+            borderRadius:'var(--radius-sm,4px)', background:'transparent',
+            color:'var(--tx2)', fontSize:11, cursor:'pointer' }}>Add</button>
+        </div>
+      </div>
+
+      <div style={{ marginBottom:14 }}>
+        <label style={lbl}>References</label>
+        <div style={{ display:'flex', flexDirection:'column', gap:3, marginBottom:6 }}>
+          {refs.map(r => (
+            <div key={r} style={{ display:'flex', alignItems:'center', gap:8 }}>
+              <span style={{ flex:1, fontFamily:'var(--mono)', fontSize:11, color:'var(--accent)',
+                overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r}</span>
+              <span onClick={() => setRefs(p=>p.filter(x=>x!==r))}
+                    style={{ cursor:'pointer', color:'var(--tx3)', fontSize:13 }}>×</span>
+            </div>
+          ))}
+        </div>
+        <div style={{ display:'flex', gap:6 }}>
+          <input style={{ ...inp, flex:1, fontFamily:'var(--mono)', fontSize:11 }}
+                 placeholder="https://…"
+                 value={refInput} onChange={e=>setRefInput(e.target.value)}
+                 onKeyDown={e=>{ if(e.key==='Enter'){e.preventDefault();addRef();} }}/>
+          <button onClick={addRef} style={{ padding:'6px 12px', border:'1px solid var(--ln)',
+            borderRadius:'var(--radius-sm,4px)', background:'transparent',
+            color:'var(--tx2)', fontSize:11, cursor:'pointer' }}>Add</button>
+        </div>
+      </div>
+
+      {err && (
+        <div style={{ marginBottom:10, padding:'7px 10px', fontSize:12,
+          background:'rgba(240,84,84,.1)', border:'1px solid var(--danger,#f05454)',
+          borderRadius:'var(--radius-sm,4px)', color:'var(--danger,#f05454)' }}>{err}</div>
+      )}
+
+      <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
+        <button onClick={onCancel} disabled={saving} style={{ padding:'5px 14px',
+          border:'1px solid var(--ln)', borderRadius:'var(--radius-sm,4px)',
+          background:'transparent', color:'var(--tx2)', fontSize:12, cursor:'pointer' }}>Cancel</button>
+        <button onClick={save} disabled={saving} style={{ padding:'5px 18px',
+          border:'1px solid var(--accent)', borderRadius:'var(--radius-sm,4px)',
+          background:'transparent', color:'var(--accent)', fontSize:12,
+          cursor:saving?'wait':'pointer' }}>
+          {saving ? 'Saving…' : existing ? 'Save Changes' : 'Save Explanation'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── ThreatIntelView — full settings-style page ─────────────────────────────────
+function ThreatIntelView({ role }) {
+  const [entries,  setEntries]  = useState([]);
+  const [gaps,     setGaps]     = useState([]);
+  const [loading,  setLoading]  = useState(true);
+  const [tab,      setTab]      = useState('entries');
+  const [showForm, setShowForm] = useState(false);
+  const [editing,  setEditing]  = useState(null);
+  const [delId,    setDelId]    = useState(null);
+  const canWrite = role==='admin'||role==='analyst';
+
+  function load() {
+    setLoading(true);
+    Promise.all([
+      fetch('/threat-intel').then(r=>r.json()),
+      fetch('/threat-intel/gaps').then(r=>r.json()),
+    ]).then(([e,g]) => {
+      setEntries(Array.isArray(e)?e:[]);
+      setGaps(Array.isArray(g)?g:[]);
+      setLoading(false);
+    }).catch(()=>setLoading(false));
+  }
+  useEffect(()=>{ load(); },[]);
+
+  async function doDelete(id) {
+    await fetch(`/threat-intel/${id}`,{method:'DELETE'});
+    setDelId(null); load();
+  }
+
+  const fmtDate = ts => new Date(ts*1000).toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'});
+
+  const sectionStyle = { padding:'20px 24px', maxWidth:900 };
+  const cardStyle = { background:'var(--s1)', border:'1px solid var(--ln)',
+    borderRadius:'var(--radius-lg,10px)', padding:'14px 16px', marginBottom:10 };
+  const tabBtnStyle = active => ({
+    padding:'4px 14px', border:'none', cursor:'pointer', fontSize:11,
+    fontFamily:'var(--mono)', borderRadius:'var(--radius-sm,4px)',
+    background: active ? 'var(--accent)' : 'transparent',
+    color: active ? 'white' : 'var(--tx3)',
+  });
+
+  return (
+    <div style={{ overflowY:'auto', flex:1 }}>
+      {/* Sub-tab bar */}
+      <div style={{ display:'flex', alignItems:'center', gap:8, padding:'10px 24px',
+                    borderBottom:'1px solid var(--ln)', background:'var(--s1)', flexShrink:0 }}>
+        <div style={{ display:'flex', gap:2, background:'var(--s2)',
+                      border:'1px solid var(--ln)', borderRadius:'var(--radius-sm,4px)', padding:2 }}>
+          <button style={tabBtnStyle(tab==='entries')} onClick={()=>setTab('entries')}>
+            Explanations ({entries.length})
+          </button>
+          <button style={tabBtnStyle(tab==='gaps')} onClick={()=>setTab('gaps')}>
+            Coverage Gaps ({gaps.length})
+          </button>
+        </div>
+        {canWrite && tab==='entries' && (
+          <button onClick={()=>{ setEditing(null); setShowForm(true); }} style={{
+            marginLeft:'auto', padding:'5px 14px', cursor:'pointer',
+            border:'1px solid var(--accent)', borderRadius:'var(--radius-sm,4px)',
+            background:'transparent', color:'var(--accent)', fontSize:12 }}>
+            + Add Explanation
+          </button>
+        )}
+      </div>
+
+      <div style={sectionStyle}>
+        {/* Info banner */}
+        <div style={{ marginBottom:16, padding:'10px 14px', fontSize:12,
+                      color:'var(--tx2)', lineHeight:1.7,
+                      background:'rgba(99,102,241,.08)', borderRadius:'var(--radius-md,6px)',
+                      border:'1px solid rgba(99,102,241,.2)' }}>
+          <strong style={{ color:'var(--accent)' }}>Threat Intel</strong> explanations appear
+          when analysts click <strong style={{ color:'var(--tx1)' }}>Explain</strong> on any alert.
+          SID-specific entries take priority over category entries.
+        </div>
+
+        {loading && <div style={{ color:'var(--tx3)', fontFamily:'var(--mono)', fontSize:12 }}>Loading…</div>}
+
+        {/* Inline add/edit form */}
+        {showForm && tab==='entries' && (
+          <TIManualForm existing={editing} onSaved={()=>{ setShowForm(false); setEditing(null); load(); }}
+                        onCancel={()=>{ setShowForm(false); setEditing(null); }}/>
+        )}
+
+        {/* ── Explanations tab ── */}
+        {tab==='entries' && !loading && entries.length===0 && !showForm && (
+          <div style={{ textAlign:'center', padding:'40px 0', color:'var(--tx3)' }}>
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1"
+                 style={{ marginBottom:10, opacity:.3 }}>
+              <circle cx="12" cy="12" r="10"/>
+              <line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+            </svg>
+            <div style={{ fontSize:13 }}>No explanations yet</div>
+            <div style={{ fontSize:11, marginTop:4 }}>Add entries here or click Explain on any alert</div>
+          </div>
+        )}
+
+        {tab==='entries' && !loading && entries.map(e => (
+          <div key={e.id} style={{ ...cardStyle,
+            borderLeft:`3px solid ${e.sig_id?'var(--accent)':'var(--sev-info,#4f9cf9)'}` }}>
+            <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:8 }}>
+              <span style={{ fontSize:9, fontFamily:'var(--mono)', letterSpacing:'.07em',
+                textTransform:'uppercase', padding:'2px 7px', borderRadius:20,
+                background: e.sig_id?'rgba(79,156,249,.12)':'rgba(159,122,234,.15)',
+                color: e.sig_id?'var(--accent)':'var(--sev-info,#9f7aea)',
+                border:`1px solid ${e.sig_id?'rgba(79,156,249,.3)':'rgba(159,122,234,.3)'}` }}>
+                {e.sig_id ? `SID ${e.sig_id}` : 'Category'}
+              </span>
+              <span style={{ fontWeight:500, fontSize:13, color:'var(--tx1)' }}>
+                {e.sig_msg||e.category||'—'}
+              </span>
+              <span style={{ marginLeft:'auto', fontSize:10, fontFamily:'var(--mono)', color:'var(--tx3)' }}>
+                {fmtDate(e.updated_at)} · {e.created_by||'system'}
+              </span>
+            </div>
+            <div style={{ fontSize:12, color:'var(--tx2)', lineHeight:1.65, marginBottom:10,
+              overflow:'hidden', display:'-webkit-box', WebkitLineClamp:3, WebkitBoxOrient:'vertical' }}>
+              {e.explanation}
+            </div>
+            {e.tags?.length>0 && (
+              <div style={{ display:'flex', gap:5, flexWrap:'wrap', marginBottom:10 }}>
+                {e.tags.map(t=>(
+                  <span key={t} style={{ padding:'1px 7px', borderRadius:20, fontSize:10,
+                    background:'var(--s3)', border:'1px solid var(--ln)',
+                    color:'var(--tx3)', fontFamily:'var(--mono)' }}>{t}</span>
+                ))}
+              </div>
+            )}
+            {canWrite && (
+              <div style={{ display:'flex', gap:7 }}>
+                <button style={{ padding:'3px 10px', border:'1px solid var(--ln)',
+                  borderRadius:'var(--radius-sm,4px)', background:'transparent',
+                  color:'var(--tx2)', fontSize:11, cursor:'pointer' }}
+                  onClick={()=>{ setEditing(e); setShowForm(true); setTab('entries'); }}>Edit</button>
+                {role==='admin' && (
+                  <button style={{ padding:'3px 10px', border:'1px solid var(--danger,#f05454)',
+                    borderRadius:'var(--radius-sm,4px)', background:'transparent',
+                    color:'var(--danger,#f05454)', fontSize:11, cursor:'pointer' }}
+                    onClick={()=>setDelId(e.id)}>Delete</button>
+                )}
+              </div>
+            )}
+          </div>
+        ))}
+
+        {/* ── Coverage Gaps tab ── */}
+        {tab==='gaps' && !loading && (
+          <>
+            <div style={{ marginBottom:14, padding:'10px 14px', fontSize:12,
+              color:'var(--tx2)', lineHeight:1.7,
+              background:'rgba(245,200,66,.08)', borderRadius:'var(--radius-md,6px)',
+              border:'1px solid rgba(245,200,66,.2)' }}>
+              <strong style={{ color:'var(--sev-medium,#f5c842)' }}>Coverage Gaps</strong> — your most-fired
+              signatures with no explanation. Click <strong style={{ color:'var(--tx1)' }}>Add</strong> to document them.
+            </div>
+            {gaps.length===0 && (
+              <div style={{ textAlign:'center', padding:'40px 0', color:'var(--tx3)' }}>
+                <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1"
+                     style={{ marginBottom:10, opacity:.3 }}>
+                  <polyline points="20 6 9 17 4 12"/>
+                </svg>
+                <div style={{ fontSize:13 }}>Full coverage!</div>
+                <div style={{ fontSize:11, marginTop:4 }}>All top-firing SIDs have explanations</div>
+              </div>
+            )}
+            {gaps.map(g => (
+              <div key={g.sig_id} style={{ ...cardStyle, display:'flex', alignItems:'center', gap:12 }}>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontFamily:'var(--mono)', fontSize:11, color:'var(--tx3)', marginBottom:3 }}>
+                    SID {g.sig_id}
+                  </div>
+                  <div style={{ fontSize:12, color:'var(--tx1)', overflow:'hidden',
+                    textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{g.sig_msg}</div>
+                </div>
+                <div style={{ fontFamily:'var(--mono)', fontSize:11, color:'var(--sev-high,#f5944a)', whiteSpace:'nowrap' }}>
+                  {g.count?.toLocaleString()} fires
+                </div>
+                {canWrite && (
+                  <button onClick={()=>{ setEditing({_prefill:true,sig_id:g.sig_id,sig_msg:g.sig_msg});
+                                         setShowForm(true); setTab('entries'); }}
+                    style={{ padding:'4px 12px', border:'1px solid var(--accent)',
+                      borderRadius:'var(--radius-sm,4px)', background:'transparent',
+                      color:'var(--accent)', fontSize:11, cursor:'pointer', whiteSpace:'nowrap' }}>
+                    + Add
+                  </button>
+                )}
+              </div>
+            ))}
+          </>
+        )}
+      </div>
+
+      {/* Delete confirm */}
+      {delId!==null && (
+        <ConfirmDialog
+          title="Delete explanation?"
+          body="This will permanently remove the explanation."
+          confirmLabel="Delete"
+          variant="danger"
+          onConfirm={() => doDelete(delId)}
+          onClose={() => setDelId(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function TIManualForm({ existing, onSaved, onCancel }) {
+  const prefill = existing?._prefill;
+  const [sigId,       setSigId]       = useState(existing?.sig_id&&!prefill?String(existing.sig_id):prefill?String(existing.sig_id):'');
+  const [sigMsg,      setSigMsg]      = useState(existing?.sig_msg||'');
+  const [category,    setCategory]    = useState(existing?.category||'');
+  const [explanation, setExplanation] = useState(existing?.explanation||'');
+  const [tagInput,    setTagInput]    = useState('');
+  const [tags,        setTags]        = useState(existing?.tags||[]);
+  const [refInput,    setRefInput]    = useState('');
+  const [refs,        setRefs]        = useState(existing?.refs||[]);
+  const [saving,      setSaving]      = useState(false);
+  const [err,         setErr]         = useState('');
+  const isEdit = existing?.id && !prefill;
+
+  function addTag(){const t=tagInput.trim();if(t&&!tags.includes(t))setTags(p=>[...p,t]);setTagInput('');}
+  function addRef(){const r=refInput.trim();if(r&&!refs.includes(r))setRefs(p=>[...p,r]);setRefInput('');}
+
+  async function save() {
+    if (!explanation.trim()) { setErr('Explanation is required'); return; }
+    if (!sigId&&!category.trim()) { setErr('SID or Category is required'); return; }
+    setSaving(true); setErr('');
+    const body = { sig_id:sigId?parseInt(sigId):null, sig_msg:sigMsg.trim()||null,
+                   category:category.trim()||null, explanation:explanation.trim(), tags, refs };
+    const method   = isEdit?'PUT':'POST';
+    const endpoint = isEdit?`/threat-intel/${existing.id}`:'/threat-intel';
+    try {
+      const r = await fetch(endpoint,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      const d = await r.json();
+      if (!r.ok){setErr(d.error||'Save failed');return;}
+      onSaved(d);
+    } catch { setErr('Network error'); }
+    finally { setSaving(false); }
+  }
+
+  const inp = { width:'100%', padding:'7px 10px', background:'var(--s2)',
+    border:'1px solid var(--ln)', borderRadius:'var(--radius-sm,4px)',
+    color:'var(--tx1)', fontSize:12, fontFamily:'var(--sans,inherit)',
+    outline:'none', boxSizing:'border-box' };
+  const lbl = { fontSize:9, fontWeight:600, letterSpacing:'.09em', textTransform:'uppercase',
+    color:'var(--tx3)', display:'block', marginBottom:5 };
+
+  return (
+    <div style={{ background:'var(--s2)', border:'1px solid var(--ln)',
+      borderRadius:'var(--radius-lg,10px)', padding:18, marginBottom:18 }}>
+      <div style={{ fontSize:13, fontWeight:500, color:'var(--tx1)', marginBottom:14 }}>
+        {isEdit?'Edit Explanation':'New Explanation'}
+      </div>
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:12 }}>
+        <div><label style={lbl}>SID (optional)</label>
+          <input style={{ ...inp, fontFamily:'var(--mono)' }} type="number" placeholder="e.g. 2100498"
+                 value={sigId} onChange={e=>setSigId(e.target.value)}/></div>
+        <div><label style={lbl}>Category (optional)</label>
+          <input style={inp} placeholder="e.g. trojan-activity"
+                 value={category} onChange={e=>setCategory(e.target.value)}/></div>
+      </div>
+      <div style={{ marginBottom:12 }}>
+        <label style={lbl}>Signature name (optional)</label>
+        <input style={inp} placeholder="Human-readable name"
+               value={sigMsg} onChange={e=>setSigMsg(e.target.value)}/>
+      </div>
+      <div style={{ marginBottom:12 }}>
+        <label style={lbl}>Explanation</label>
+        <textarea style={{ ...inp, minHeight:90, resize:'vertical', lineHeight:1.65 }}
+          placeholder="What does this alert mean?"
+          value={explanation} onChange={e=>setExplanation(e.target.value)}/>
+      </div>
+      <div style={{ marginBottom:12 }}>
+        <label style={lbl}>Tags</label>
+        <div style={{ display:'flex', flexWrap:'wrap', gap:5, marginBottom:5 }}>
+          {tags.map(t=>(
+            <span key={t} style={{ display:'inline-flex',alignItems:'center',gap:4,
+              padding:'2px 8px',borderRadius:20,fontSize:11,
+              background:'var(--s3)',border:'1px solid var(--ln)',color:'var(--tx2)',fontFamily:'var(--mono)' }}>
+              {t}<span onClick={()=>setTags(p=>p.filter(x=>x!==t))} style={{ cursor:'pointer',color:'var(--tx3)' }}>×</span>
+            </span>
+          ))}
+        </div>
+        <div style={{ display:'flex',gap:6 }}>
+          <input style={{ ...inp,flex:1 }} placeholder="Add tag…" value={tagInput}
+                 onChange={e=>setTagInput(e.target.value)}
+                 onKeyDown={e=>{ if(e.key==='Enter'){e.preventDefault();addTag();} }}/>
+          <button onClick={addTag} style={{ padding:'6px 10px',border:'1px solid var(--ln)',
+            borderRadius:'var(--radius-sm,4px)',background:'transparent',color:'var(--tx2)',fontSize:11,cursor:'pointer' }}>Add</button>
+        </div>
+      </div>
+      <div style={{ marginBottom:14 }}>
+        <label style={lbl}>References</label>
+        <div style={{ display:'flex',flexDirection:'column',gap:3,marginBottom:5 }}>
+          {refs.map(r=>(
+            <div key={r} style={{ display:'flex',alignItems:'center',gap:8 }}>
+              <span style={{ flex:1,fontFamily:'var(--mono)',fontSize:11,color:'var(--accent)',
+                overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap' }}>{r}</span>
+              <span onClick={()=>setRefs(p=>p.filter(x=>x!==r))} style={{ cursor:'pointer',color:'var(--tx3)',fontSize:13 }}>×</span>
+            </div>
+          ))}
+        </div>
+        <div style={{ display:'flex',gap:6 }}>
+          <input style={{ ...inp,flex:1,fontFamily:'var(--mono)',fontSize:11 }} placeholder="https://…"
+                 value={refInput} onChange={e=>setRefInput(e.target.value)}
+                 onKeyDown={e=>{ if(e.key==='Enter'){e.preventDefault();addRef();} }}/>
+          <button onClick={addRef} style={{ padding:'6px 10px',border:'1px solid var(--ln)',
+            borderRadius:'var(--radius-sm,4px)',background:'transparent',color:'var(--tx2)',fontSize:11,cursor:'pointer' }}>Add</button>
+        </div>
+      </div>
+      {err && <div style={{ marginBottom:10,padding:'6px 10px',fontSize:12,
+        background:'rgba(240,84,84,.1)',border:'1px solid var(--danger,#f05454)',
+        borderRadius:'var(--radius-sm,4px)',color:'var(--danger,#f05454)' }}>{err}</div>}
+      <div style={{ display:'flex',gap:8,justifyContent:'flex-end' }}>
+        <button onClick={onCancel} disabled={saving} style={{ padding:'5px 14px',
+          border:'1px solid var(--ln)',borderRadius:'var(--radius-sm,4px)',
+          background:'transparent',color:'var(--tx2)',fontSize:12,cursor:'pointer' }}>Cancel</button>
+        <button onClick={save} disabled={saving} style={{ padding:'5px 18px',
+          border:'1px solid var(--accent)',borderRadius:'var(--radius-sm,4px)',
+          background:'transparent',color:'var(--accent)',fontSize:12,
+          cursor:saving?'wait':'pointer' }}>{saving?'Saving…':isEdit?'Save':'Create'}</button>
+      </div>
+    </div>
+  );
+}
+
+
+// ── AIExplainView ─────────────────────────────────────────────────────────────
+function AIExplainView({ role }) {
+  const [settings,     setSettings]     = useState({ provider:'openai', enabled:false, api_key_set:false });
+  const [apiKeyInput,  setApiKeyInput]  = useState('');
+  const [loading,      setLoading]      = useState(true);
+  const [saving,       setSaving]       = useState(false);
+  const [saved,        setSaved]        = useState(false);
+  const [err,          setErr]          = useState('');
+  const isAdmin = role === 'admin';
+
+  useEffect(() => {
+    fetch('/ai-config').then(r=>r.json()).then(d=>{ setSettings(d); setLoading(false); }).catch(()=>setLoading(false));
+  }, []);
+
+  async function save() {
+    setSaving(true); setErr(''); setSaved(false);
+    const body = { provider: settings.provider, enabled: settings.enabled };
+    if (apiKeyInput.trim()) body.api_key = apiKeyInput.trim();
+    try {
+      const r = await fetch('/ai-config', { method:'PUT',
+        headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+      const d = await r.json();
+      if (!r.ok) { setErr(d.error||'Save failed'); return; }
+      setSettings({ ...d, api_key_set: d.api_key_set });
+      setApiKeyInput('');
+      setSaved(true);
+      setTimeout(()=>setSaved(false), 2500);
+    } catch { setErr('Network error'); }
+    finally { setSaving(false); }
+  }
+
+  const PROVIDERS = [
+    { id:'openai',    label:'OpenAI',    hint:'gpt-4o-mini' },
+    { id:'anthropic', label:'Anthropic', hint:'claude-3-5-haiku' },
+    { id:'deepseek',  label:'DeepSeek',  hint:'deepseek-chat' },
+  ];
+
+  const inp = { width:'100%', padding:'8px 11px', background:'var(--s2)',
+    border:'1px solid var(--ln)', borderRadius:'var(--radius-sm,4px)',
+    color:'var(--tx1)', fontSize:12, fontFamily:'var(--mono)', outline:'none', boxSizing:'border-box' };
+  const lbl = { fontSize:9, fontWeight:600, letterSpacing:'.09em', textTransform:'uppercase',
+    color:'var(--tx3)', display:'block', marginBottom:6 };
+
+  if (loading) return <div style={{ padding:32, color:'var(--tx3)', fontFamily:'var(--mono)', fontSize:12 }}>Loading…</div>;
+
+  const providerHint = PROVIDERS.find(p=>p.id===settings.provider)?.hint || '';
+
+  return (
+    <div style={{ overflowY:'auto', flex:1 }}>
+      <div style={{ padding:'20px 24px', maxWidth:760 }}>
+
+        {/* Banner */}
+        <div style={{ marginBottom:20, padding:'12px 16px', fontSize:12, color:'var(--tx2)',
+                      lineHeight:1.7, background:'rgba(99,102,241,.08)',
+                      borderRadius:'var(--radius-md,6px)', border:'1px solid rgba(99,102,241,.2)' }}>
+          <strong style={{ color:'var(--accent)' }}>AI Explanation</strong> generates an executive
+          summary for every new alert automatically. When enabled, each alert's
+          {' '}<strong style={{ color:'var(--tx1)' }}>Explain</strong> dialog shows an AI Summary tab
+          with a short, actionable analysis. Configure your provider and API key below.
+        </div>
+
+        {/* Enable toggle */}
+        <div style={{ background:'var(--s1)', border:'1px solid var(--ln)',
+                      borderRadius:'var(--radius-lg,10px)', padding:'16px 20px', marginBottom:14 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:12 }}>
+            <div style={{ flex:1 }}>
+              <div style={{ fontWeight:500, fontSize:13, color:'var(--tx1)', marginBottom:2 }}>AI Explanation</div>
+              <div style={{ fontSize:11, color:'var(--tx3)' }}>
+                Auto-explain new alerts and show AI Summary in the Explain dialog
+              </div>
+            </div>
+            {isAdmin ? (
+              <button
+                onClick={()=>{ setSettings(s=>({...s, enabled:!s.enabled})); }}
+                style={{
+                  width:44, height:24, borderRadius:12, border:'none', cursor:'pointer', flexShrink:0,
+                  background: settings.enabled ? 'var(--accent)' : 'var(--s3)',
+                  position:'relative', transition:'background .2s',
+                }}>
+                <div style={{
+                  position:'absolute', top:3, left: settings.enabled ? 23 : 3,
+                  width:18, height:18, borderRadius:'50%', background:'white',
+                  transition:'left .2s', boxShadow:'0 1px 3px rgba(0,0,0,.3)',
+                }}/>
+              </button>
+            ) : (
+              <span style={{ fontSize:11, fontFamily:'var(--mono)',
+                color: settings.enabled ? 'var(--accent)' : 'var(--tx3)' }}>
+                {settings.enabled ? 'Enabled' : 'Disabled'}
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Provider & Key */}
+        <div style={{ background:'var(--s1)', border:'1px solid var(--ln)',
+                      borderRadius:'var(--radius-lg,10px)', padding:'16px 20px', marginBottom:14 }}>
+          <div style={{ fontSize:12, fontWeight:500, color:'var(--tx1)', marginBottom:14 }}>Provider Settings</div>
+
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:14, marginBottom:14 }}>
+            <div>
+              <label style={lbl}>AI Provider</label>
+              <select
+                disabled={!isAdmin}
+                value={settings.provider}
+                onChange={e=>setSettings(s=>({...s, provider:e.target.value}))}
+                style={{ ...inp, cursor: isAdmin ? 'pointer' : 'default' }}>
+                {PROVIDERS.map(p=>(
+                  <option key={p.id} value={p.id}>{p.label} ({p.hint})</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label style={lbl}>
+                API Key
+                {settings.api_key_set && (
+                  <span style={{ marginLeft:6, color:'var(--success,#4caf82)',
+                    fontFamily:'var(--mono)', letterSpacing:0, textTransform:'none' }}>✓ key saved</span>
+                )}
+              </label>
+              <input
+                type="password"
+                disabled={!isAdmin}
+                placeholder={settings.api_key_set ? '••••••••••• (leave blank to keep)' : 'sk-…  or  deepseek-…'}
+                value={apiKeyInput}
+                onChange={e=>setApiKeyInput(e.target.value)}
+                style={{ ...inp, cursor: isAdmin ? 'text' : 'default' }}
+              />
+            </div>
+          </div>
+
+          <div style={{ fontSize:11, color:'var(--tx3)', marginBottom:14 }}>
+            API key is stored encrypted in the config database and can also be set in
+            {' '}<code style={{ fontFamily:'var(--mono)', background:'var(--s2)',
+              padding:'1px 5px', borderRadius:3 }}>/etc/heimdall/heimdall.conf</code>.
+            The UI setting takes precedence.
+          </div>
+
+          {!isAdmin && (
+            <div style={{ fontSize:11, color:'var(--tx3)', fontStyle:'italic' }}>
+              Only admins can modify AI settings.
+            </div>
+          )}
+
+          {err && (
+            <div style={{ marginBottom:10, padding:'7px 11px', fontSize:12,
+              background:'rgba(240,84,84,.1)', border:'1px solid var(--danger,#f05454)',
+              borderRadius:'var(--radius-sm,4px)', color:'var(--danger,#f05454)' }}>{err}</div>
+          )}
+
+          {isAdmin && (
+            <div style={{ display:'flex', gap:10, justifyContent:'flex-end', alignItems:'center' }}>
+              {saved && (
+                <span style={{ fontSize:11, color:'var(--success,#4caf82)', fontFamily:'var(--mono)' }}>
+                  ✓ Settings saved
+                </span>
+              )}
+              <button onClick={save} disabled={saving} style={{ padding:'6px 20px',
+                border:'1px solid var(--accent)', borderRadius:'var(--radius-sm,4px)',
+                background:'transparent', color:'var(--accent)', fontSize:12,
+                cursor:saving?'wait':'pointer' }}>
+                {saving ? 'Saving…' : 'Save Settings'}
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Model info */}
+        <div style={{ background:'var(--s1)', border:'1px solid var(--ln)',
+                      borderRadius:'var(--radius-lg,10px)', padding:'16px 20px' }}>
+          <div style={{ fontSize:12, fontWeight:500, color:'var(--tx1)', marginBottom:10 }}>Models Used</div>
+          <div style={{ display:'grid', gap:8 }}>
+            {PROVIDERS.map(p=>(
+              <div key={p.id} style={{ display:'flex', alignItems:'center', gap:10,
+                opacity: settings.provider===p.id ? 1 : .45 }}>
+                <div style={{ width:8, height:8, borderRadius:'50%', flexShrink:0,
+                  background: settings.provider===p.id ? 'var(--accent)' : 'var(--tx3)' }}/>
+                <span style={{ fontFamily:'var(--mono)', fontSize:11, color:'var(--tx1)' }}>{p.label}</span>
+                <span style={{ fontFamily:'var(--mono)', fontSize:11, color:'var(--tx3)' }}>→ {p.hint}</span>
+                {settings.provider===p.id && (
+                  <span style={{ marginLeft:'auto', fontSize:9, fontFamily:'var(--mono)',
+                    textTransform:'uppercase', letterSpacing:'.07em',
+                    color:'var(--accent)', border:'1px solid rgba(99,102,241,.3)',
+                    borderRadius:20, padding:'1px 7px' }}>Active</span>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+
+      </div>
+    </div>
+  );
+}
+
+
 function App() {
   const [alerts,   setAlerts]   = useState([]);
   const [view,     setView]     = useState('alerts');
@@ -958,6 +2434,11 @@ function App() {
   const [role,     setRole]     = useState('viewer');
   const [username, setUsername] = useState('');
   const [connected,setConnected]= useState(false);
+  const [showExplain,  setShowExplain]  = useState(false);
+  const [explainAlert, setExplainAlert] = useState(null);
+  const [aiSettings,     setAiSettings]     = useState({ provider:'openai', enabled:false, api_key_set:false });
+  const [aiExplanations, setAiExplanations] = useState({});
+  const aiEnabledRef = React.useRef(false);
 
   useEffect(()=>{
     fetch('/me').then(r=>r.json()).then(d=>{setRole(d.role||'viewer');setUsername(d.username||'');}).catch(()=>{});
@@ -975,6 +2456,7 @@ function App() {
           setAlerts(prev=>{if(prev.find(x=>x.id===a.id))return prev;return[a,...prev].slice(0,500);});
           setSparkData(prev=>{const n=[...prev.slice(1)];n.push(prev[prev.length-1]+1);return n;});
           setTimeout(()=>setAlerts(prev=>prev.map(x=>x.id===a.id?{...x,_new:false}:x)),600);
+          if (aiEnabledRef.current) requestAiExplain(a);
         }catch{}
       });
       es.addEventListener('ping',()=>{});
@@ -991,6 +2473,38 @@ function App() {
     },4000);
     return ()=>clearInterval(id);
   },[]);
+
+  // ── AI explain helper ────────────────────────────────────────────────────
+  function requestAiExplain(alert) {
+    const id = alert.id;
+    if (!id) return;
+    setAiExplanations(prev => {
+      if (prev[id]?.text || prev[id]?.loading) return prev;
+      return { ...prev, [id]: { loading:true, text:null, error:null } };
+    });
+    fetch('/ai-explain', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ alert }),
+    })
+      .then(r => r.json())
+      .then(d => {
+        setAiExplanations(prev => ({
+          ...prev,
+          [id]: d.explanation
+            ? { loading:false, text:d.explanation, error:null }
+            : { loading:false, text:null, error:d.error||'Unknown error' },
+        }));
+      })
+      .catch(() => {
+        setAiExplanations(prev => ({
+          ...prev,
+          [id]: { loading:false, text:null, error:'Network error' },
+        }));
+      });
+  }
+
+  React.useEffect(() => { aiEnabledRef.current = aiSettings.enabled; }, [aiSettings.enabled]);
 
   function applyTheme(t){setTheme(t);document.documentElement.setAttribute('data-theme',t);localStorage.setItem('heimdall-theme',t);}
   async function handleLogout(){try{await fetch('/logout',{method:'POST'});}catch{}window.location.href='/login';}
@@ -1023,8 +2537,8 @@ function App() {
         <div className="tb-stat"><div className="tb-sev-dot" style={{background:'var(--sev-medium)'}}/>MED<strong>{sevCounts.medium}</strong></div>
         <div className="tb-spacer"/>
         <div className="view-tabs">
-          {['alerts','flows','dns','charts','settings'].map(v=>(
-            <button key={v} className={`tab-btn${view===v?' active':''}`} onClick={()=>setView(v)}>{v.toUpperCase()}</button>
+          {['alerts','flows','dns','charts','threat-intel','ai-explain','settings'].map(v=>(
+            <button key={v} className={`tab-btn${view===v?' active':''}`} onClick={()=>setView(v)}>{({'alerts':'Alerts','flows':'Flows','dns':'DNS','charts':'Charts','threat-intel':'Threat Intel','ai-explain':'AI Explain','settings':'Settings'})[v]||v.toUpperCase()}</button>
           ))}
         </div>
         <div style={{position:'relative'}}><ThemePicker theme={theme} onChange={applyTheme}/></div>
@@ -1045,7 +2559,8 @@ function App() {
 
       {view==='alerts'&&(
         <AlertTable alerts={alerts} svFilter={svFilter} setSvFilter={setSvFilter}
-                    search={search} setSearch={setSearch} role={role} setAlerts={setAlerts}/>
+                    search={search} setSearch={setSearch} role={role} setAlerts={setAlerts}
+                    onExplain={a=>{setExplainAlert(a);setShowExplain(true);}}/>
       )}
 
       {view!=='alerts'&&(
@@ -1053,6 +2568,9 @@ function App() {
           {view==='flows'&&<><div className="main-header"><span className="main-title">FLOW EVENTS</span></div><FlowsView/></>}
           {view==='dns'&&<><div className="main-header"><span className="main-title">DNS QUERIES</span></div><DNSView/></>}
           {view==='charts'&&<ChartsView/>}
+          {view==='threat-intel'&&<ThreatIntelView role={role}/>}
+
+          {view==='ai-explain'&&<AIExplainView role={role}/>}
           {view==='settings'&&<SettingsView theme={theme} setTheme={applyTheme} role={role} username={username} onLogout={handleLogout}/>}
         </div>
       )}
@@ -1066,6 +2584,14 @@ function App() {
         <div style={{flex:1}}/>
         <div className="status-item" style={{color:'var(--tx4)'}}>{new Date().toLocaleDateString([],{month:'short',day:'numeric',year:'numeric'})}</div>
       </footer>
+      {showExplain && explainAlert && (
+        <ExplainDialog
+          alert={explainAlert} role={role}
+          aiEnabled={aiSettings.enabled}
+          aiExplanation={aiExplanations[explainAlert.id]}
+          onRequestAiExplain={requestAiExplain}
+          onClose={() => setShowExplain(false)}/>
+      )}
     </div>
   );
 }
