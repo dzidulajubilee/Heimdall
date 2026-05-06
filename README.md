@@ -1,4 +1,4 @@
-# Heimdall IDS
+# Heimdall
 
 > Real-time Suricata IDS dashboard — alerts, flows, DNS, HTTP, AI-powered triage, and RBAC. Fully self-contained. No cloud. No external dependencies.
 
@@ -456,8 +456,8 @@ sudo apt install dpkg-dev
 ### Build
 
 ```bash
-git clone https://github.com/heimdall-ids/heimdall
-cd heimdall
+git clone https://github.com/dzidulajubilee/Heimdall.git
+cd Heimdall
 ./build-deb.sh 0.4.1
 # → packaging/build/heimdall-ids_0.4.1_all.deb
 ```
@@ -474,7 +474,7 @@ The build script:
 
 ## Changelog
 
-### v0.4.1 — 2026-05-05
+### v0.4.1 — 2026-05-06
 - **Fix:** `NameError: name 'threading' is not defined` in `handlers.py` — `import threading` was missing, causing the service to crash on startup in a restart loop
 
 ### v0.4.0 — 2026-05-03
@@ -501,4 +501,4 @@ This program is free software: you can redistribute it and/or modify it under th
 
 If you run a modified version of this software on a network server, you must make the complete source code available to users interacting with it remotely, under the terms of this License.
 
-See [LICENSE](./LICENSE) for the full text or visit <https://www.gnu.org/licenses/agpl-3.0.txt>.
+
