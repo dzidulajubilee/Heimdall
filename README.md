@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 # Heimdall IDS Dashboard
+=======
+# Heimdall
+>>>>>>> 33d86bafdf87a86c7b59e0edfce9ee79f1d379f5
 
 **A self-hosted, fully airgapped network intrusion detection dashboard for Suricata.**  
 Built by G-Sentry · Licensed under [GNU AGPL v3.0](LICENSE)
@@ -360,6 +364,7 @@ sudo apt install dpkg-dev
 ```
 
 ```bash
+<<<<<<< HEAD
 # Clone or extract the source
 cd heimdall-github/
 
@@ -371,6 +376,12 @@ bash build-deb.sh 0.6
 
 # Output
 # packaging/build/heimdall-ids_0.5_all.deb
+=======
+git clone https://github.com/dzidulajubilee/Heimdall.git
+cd Heimdall
+./build-deb.sh 0.4.1
+# → packaging/build/heimdall-ids_0.4.1_all.deb
+>>>>>>> 33d86bafdf87a86c7b59e0edfce9ee79f1d379f5
 ```
 
 The build script:
@@ -385,8 +396,13 @@ The build script:
 
 ## Changelog
 
+<<<<<<< HEAD
 ### v0.5 — May 2026
 **Critical bug fix: service crash-restart loop on startup**
+=======
+### v0.4.1 — 2026-05-06
+- **Fix:** `NameError: name 'threading' is not defined` in `handlers.py` — `import threading` was missing, causing the service to crash on startup in a restart loop
+>>>>>>> 33d86bafdf87a86c7b59e0edfce9ee79f1d379f5
 
 - **Bug:** `handlers.py` used `threading.Lock()` at module level to initialise `_LOGIN_LOCK` (introduced in the v0.2 security audit), but `import threading` was missing from the file's imports block. Python evaluates module-level statements the instant a file is imported, so `server.py` crashed on its very first `from handlers import Handler` with `NameError: name 'threading' is not defined` — before the HTTP server could start. systemd detected the crash and restarted in a loop.
 - **Fix:** Added `import threading` to the imports block in `handlers.py`.
@@ -497,4 +513,10 @@ This means:
 
 ---
 
+<<<<<<< HEAD
 *Heimdall IDS — G-Sentry*
+=======
+If you run a modified version of this software on a network server, you must make the complete source code available to users interacting with it remotely, under the terms of this License.
+
+
+>>>>>>> 33d86bafdf87a86c7b59e0edfce9ee79f1d379f5
