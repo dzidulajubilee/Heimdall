@@ -8,7 +8,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-VERSION="${1:-0.4}"
+VERSION="${1:-0.5}"
 PKG="heimdall-ids_${VERSION}_all"
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 BUILD="${ROOT}/packaging/build/${PKG}"
