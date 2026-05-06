@@ -60,6 +60,9 @@ class AlertDB:
             c.row_factory = sqlite3.Row
             c.execute("PRAGMA journal_mode = WAL")
             c.execute("PRAGMA synchronous  = NORMAL")
+            c.execute("PRAGMA cache_size   = -8000")   # 8 MB page cache
+            c.execute("PRAGMA temp_store   = MEMORY")
+            c.execute("PRAGMA mmap_size    = 268435456")  # 256 MB mmap
 
             c.execute("""CREATE TABLE IF NOT EXISTS alerts (
                 id TEXT PRIMARY KEY, ts TEXT NOT NULL, ts_epoch REAL NOT NULL,
@@ -71,6 +74,9 @@ class AlertDB:
             # Composite index — accelerates the common pattern of time-range
             # filtering combined with severity grouping (charts, filtered views).
             c.execute("CREATE INDEX IF NOT EXISTS idx_a_ts_sev ON alerts (ts_epoch, severity)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_a_sigid  ON alerts (sig_id)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_a_src    ON alerts (src_ip)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_a_cat    ON alerts (category)")
 
             c.execute("""CREATE TABLE IF NOT EXISTS flows (
                 flow_id INTEGER PRIMARY KEY, ts TEXT NOT NULL, ts_epoch REAL NOT NULL,
@@ -180,16 +186,17 @@ class AlertDB:
 
     def get_alert_meta(self, alert_id: str) -> dict:
         """Return status, notes, and full activity log for one alert."""
-        status_row = self._conn().execute(
+        c = self._conn()  # single connection for all 3 reads
+        status_row = c.execute(
             "SELECT status, updated_by, updated_at FROM alert_meta WHERE alert_id = ?",
             (alert_id,)
         ).fetchone()
-        notes_rows = self._conn().execute(
+        notes_rows = c.execute(
             "SELECT username, note, created_at FROM alert_notes "
             "WHERE alert_id = ? ORDER BY created_at ASC",
             (alert_id,)
         ).fetchall()
-        activity_rows = self._conn().execute(
+        activity_rows = c.execute(
             "SELECT username, action, created_at FROM alert_activity "
             "WHERE alert_id = ? ORDER BY created_at ASC",
             (alert_id,)

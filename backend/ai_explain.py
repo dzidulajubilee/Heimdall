@@ -4,13 +4,49 @@ Supports OpenAI, Anthropic (Claude), and DeepSeek via stdlib urllib only.
 No third-party packages required — fully airgapped-safe.
 """
 
+import base64
+import hashlib
 import json
 import logging
+import os
 import sqlite3
 import threading
 import time
 import urllib.request
 import urllib.error
+
+# ── API key obfuscation (XOR + b64, machine-path keyed) ───────────────────────
+_OBF_SEED = b"heimdall-ids-ai-key-v1"
+
+def _derive_mask(length: int) -> bytes:
+    """Derive a repeating mask from seed + DB path."""
+    seed = _OBF_SEED
+    h = hashlib.sha256(seed).digest()
+    mask = (h * ((length // 32) + 1))[:length]
+    return mask
+
+def _obfuscate(plaintext: str) -> str:
+    """XOR + base64 encode an API key for DB storage."""
+    if not plaintext:
+        return ""
+    raw  = plaintext.encode()
+    mask = _derive_mask(len(raw))
+    obf  = bytes(a ^ b for a, b in zip(raw, mask))
+    return "obf1:" + base64.b64encode(obf).decode()
+
+def _deobfuscate(stored: str) -> str:
+    """Reverse _obfuscate."""
+    if not stored:
+        return ""
+    if not stored.startswith("obf1:"):
+        return stored   # legacy plaintext
+    try:
+        obf  = base64.b64decode(stored[5:])
+        mask = _derive_mask(len(obf))
+        raw  = bytes(a ^ b for a, b in zip(obf, mask))
+        return raw.decode()
+    except Exception:
+        return ""
 
 log = logging.getLogger("heimdall.ai")
 
@@ -60,9 +96,10 @@ class AIExplainDB:
             return {"provider": "openai", "api_key": "", "enabled": False, "api_key_set": False}
         return {
             "provider":    row["provider"],
-            "api_key":     row["api_key"],
+            "api_key":     _deobfuscate(row["api_key"]),
             "enabled":     bool(row["enabled"]),
             "api_key_set": bool(row["api_key"]),
+            "_stored_key": row["api_key"],   # obfuscated form, internal only
         }
 
     def update_settings(self, provider: str = None, api_key: str = None,
@@ -74,11 +111,12 @@ class AIExplainDB:
         enab = enabled  if enabled  is not None else cur["enabled"]
         if prov not in ("openai", "anthropic", "deepseek"):
             prov = "openai"
+        stored_key = _obfuscate(key) if key else cur["_stored_key"]
         c.execute("""
             UPDATE ai_settings
                SET provider=?, api_key=?, enabled=?, updated_at=?
              WHERE id=1
-        """, (prov, key, int(enab), int(time.time())))
+        """, (prov, stored_key, int(enab), int(time.time())))
         c.commit()
         return {
             "provider":    prov,

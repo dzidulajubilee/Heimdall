@@ -52,6 +52,8 @@ class DNSDB:
             c.row_factory = sqlite3.Row
             c.execute("PRAGMA journal_mode = WAL")
             c.execute("PRAGMA synchronous  = NORMAL")
+            c.execute("PRAGMA cache_size   = -4000")
+            c.execute("PRAGMA temp_store   = MEMORY")
 
             c.execute("""CREATE TABLE IF NOT EXISTS dns_events (
                 id        TEXT PRIMARY KEY,

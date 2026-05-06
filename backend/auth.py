@@ -35,6 +35,9 @@ class AuthManager:
 
     def _setup(self):
         c = self._conn()
+        c.execute("PRAGMA journal_mode = WAL")
+        c.execute("PRAGMA synchronous  = NORMAL")
+        c.execute("PRAGMA cache_size   = -2000")
         c.execute("""
             CREATE TABLE IF NOT EXISTS auth (
                 key   TEXT PRIMARY KEY,
@@ -56,6 +59,8 @@ class AuthManager:
             c.execute("ALTER TABLE sessions ADD COLUMN username TEXT DEFAULT ''")
         if "role" not in cols:
             c.execute("ALTER TABLE sessions ADD COLUMN role TEXT DEFAULT 'admin'")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_sess_exp ON sessions (expires_at)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_sess_tok ON sessions (token)")
         c.commit()
 
     # ── Single-password (legacy / emergency fallback) ─────────────────────────

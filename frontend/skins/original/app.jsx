@@ -1126,7 +1126,8 @@ function WebhookModal({ initial, onSave, onClose }) {
   const [name, setName] = useState(initial?.name || '');
   const [type, setType] = useState(initial?.type || 'generic');
   const [url,  setUrl]  = useState(initial?.url  || '');
-  const [sevs, setSevs] = useState(initial?.severities || ALL_SEVS);
+  const [sevs,       setSevs]       = useState(initial?.severities || ALL_SEVS);
+  const [allowLocal, setAllowLocal] = useState(initial?.allow_local || false);
 
   function toggleSev(s) {
     setSevs(p => p.includes(s) ? p.filter(x => x !== s) : [...p, s]);
@@ -1134,7 +1135,7 @@ function WebhookModal({ initial, onSave, onClose }) {
 
   async function submit() {
     if (!name.trim() || !url.trim()) return;
-    const body     = { name: name.trim(), type, url: url.trim(), severities: sevs, enabled: true };
+    const body     = { name: name.trim(), type, url: url.trim(), severities: sevs, enabled: true, allow_local: allowLocal };
     const endpoint = editing ? `/webhooks/${initial.id}` : '/webhooks';
     const method   = editing ? 'PUT' : 'POST';
     const res = await fetch(endpoint, {
@@ -1163,6 +1164,26 @@ function WebhookModal({ initial, onSave, onClose }) {
         <div className="form-group">
           <label className="form-label">Endpoint URL</label>
           <input className="form-input" value={url} onChange={e => setUrl(e.target.value)} placeholder="https://hooks.slack.com/…" />
+        </div>
+        <div className="form-group">
+          <label className="form-label" style={{ display:'flex', alignItems:'center', gap:10, cursor:'pointer', userSelect:'none' }}>
+            <span style={{ position:'relative', display:'inline-block', width:36, height:20, flexShrink:0 }}>
+              <input type="checkbox" checked={allowLocal} onChange={e=>setAllowLocal(e.target.checked)}
+                     style={{ opacity:0, width:0, height:0, position:'absolute' }}/>
+              <span style={{ position:'absolute', inset:0, borderRadius:20, transition:'.2s',
+                background: allowLocal ? 'var(--accent)' : 'var(--s3)',
+                border:'1px solid var(--ln)' }}/>
+              <span style={{ position:'absolute', top:2, left: allowLocal ? 18 : 2,
+                width:16, height:16, borderRadius:'50%', background:'white',
+                boxShadow:'0 1px 3px rgba(0,0,0,.3)', transition:'.2s' }}/>
+            </span>
+            <span style={{ fontSize:12, color:'var(--tx1)' }}>Allow local / private URLs</span>
+            <span style={{ fontSize:11, color:'var(--tx3)', fontWeight:400 }}>
+              {allowLocal
+                ? '⚠ Enabled — private IPs (e.g. n8n at 192.168.x.x) are permitted'
+                : 'Off — only public HTTPS endpoints allowed'}
+            </span>
+          </label>
         </div>
         <div className="form-group">
           <label className="form-label">Trigger on severity</label>
@@ -1361,7 +1382,15 @@ function SettingsView({ theme, setTheme, role, username, onLogout }) {
                   <span className="wh-type-badge">{wh.type.toUpperCase()}</span>
                   <button className={`wh-toggle${wh.enabled ? ' on' : ''}`} onClick={() => toggleWebhook(wh)} />
                 </div>
-                <div className="wh-url">{wh.url}</div>
+                <div className="wh-url" style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
+                  <span>{wh.url}</span>
+                  {wh.allow_local && (
+                    <span style={{fontSize:9,padding:'1px 6px',borderRadius:10,
+                      background:'rgba(251,191,36,.12)',color:'#fbbf24',
+                      border:'1px solid rgba(251,191,36,.3)',fontFamily:'var(--mono)',
+                      letterSpacing:'.05em',textTransform:'uppercase',flexShrink:0}}>local</span>
+                  )}
+                </div>
                 <div className="wh-sev">
                   {ALL_SEVS.map(s => {
                     const m = SEV_META[s]; const on = (wh.severities || []).includes(s);

@@ -10,6 +10,31 @@ from http.server   import BaseHTTPRequestHandler
 from pathlib       import Path
 from queue         import Empty
 from urllib.parse  import urlparse, parse_qs, unquote
+from collections   import defaultdict
+
+# ── Login rate limiting ───────────────────────────────────────────────────────
+_LOGIN_FAILS:  dict = defaultdict(list)   # ip -> [timestamp, ...]
+_LOGIN_WINDOW  = 300   # seconds
+_LOGIN_MAX     = 10    # max failures per window
+_LOGIN_LOCK    = threading.Lock()
+
+def _check_rate_limit(ip: str) -> bool:
+    """Return True if ip is currently blocked (too many failures)."""
+    now = time.time()
+    with _LOGIN_LOCK:
+        attempts = [t for t in _LOGIN_FAILS[ip] if now - t < _LOGIN_WINDOW]
+        _LOGIN_FAILS[ip] = attempts
+        return len(attempts) >= _LOGIN_MAX
+
+def _record_failure(ip: str):
+    """Record a failed login attempt for ip."""
+    with _LOGIN_LOCK:
+        _LOGIN_FAILS[ip].append(time.time())
+
+def _clear_failures(ip: str):
+    """Clear failures on successful login."""
+    with _LOGIN_LOCK:
+        _LOGIN_FAILS.pop(ip, None)
 
 from config import FRONTEND_DIR, PING_EVERY, RETAIN_DAYS, SESSION_TTL
 
@@ -119,9 +144,12 @@ class Handler(BaseHTTPRequestHandler):
         """
         body = json.dumps(data).encode()
         self.send_response(200)
-        self.send_header("Content-Type",   "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control",  "no-cache")
+        self.send_header("Content-Type",           "application/json")
+        self.send_header("Content-Length",         str(len(body)))
+        self.send_header("Cache-Control",          "no-cache")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options",        "DENY")
+        self.send_header("Referrer-Policy",        "no-referrer")
         self.end_headers()
         self.wfile.write(body)
 
@@ -131,8 +159,15 @@ class Handler(BaseHTTPRequestHandler):
             return
         data = path.read_bytes()
         self.send_response(200)
-        self.send_header("Content-Type",   content_type)
-        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Content-Type",           content_type)
+        self.send_header("Content-Length",         str(len(data)))
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options",        "DENY")
+        self.send_header("Referrer-Policy",        "no-referrer")
+        self.send_header("Content-Security-Policy",
+            "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+            "connect-src 'self'; frame-ancestors 'none';")
         if no_cache:
             self.send_header("Cache-Control", "no-cache")
         self.end_headers()
@@ -329,14 +364,22 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             self.send_error(403); return
         suffix = target.suffix.lower()
+        if suffix == ".jsx":  # never serve raw source
+            self.send_error(403); return
         ctype  = self._MIME.get(suffix, "application/octet-stream")
-        self._file(target, ctype, no_cache=suffix in (".html", ".jsx"))
+        self._file(target, ctype, no_cache=suffix in (".html",))
 
     # ── Auth ─────────────────────────────────────────────────────────────────
 
     def _do_login(self):
         body, err = self._read_json()
         if err: return
+        ip       = self.address_string()
+        if _check_rate_limit(ip):
+            log.warning("Rate limited login from %s", ip)
+            time.sleep(2)
+            self._json({"error": "Too many failed attempts. Try again later."}, 429); return
+
         username = body.get("username", "").strip()
         pw       = body.get("password", "")
 
@@ -347,6 +390,7 @@ class Handler(BaseHTTPRequestHandler):
             user = {"username": "admin", "role": "admin"}
 
         if user:
+            _clear_failures(ip)
             token = self.auth.create_session(username=user["username"], role=user["role"])
             log.info("Login OK  user=%s role=%s from %s",
                      user["username"], user["role"], self.address_string())
@@ -360,6 +404,7 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(resp)
         else:
+            _record_failure(self.address_string())
             log.warning("Failed login  user=%r from %s",
                         username or "(no username)", self.address_string())
             time.sleep(1)
@@ -476,16 +521,17 @@ class Handler(BaseHTTPRequestHandler):
     def _webhook_create(self):
         body, err = self._read_json()
         if err: return
-        name       = str(body.get("name", "")).strip()
-        wtype      = str(body.get("type", "generic")).strip()
-        url        = str(body.get("url", "")).strip()
-        severities = body.get("severities", ["critical", "high", "medium", "low", "info"])
-        enabled    = bool(body.get("enabled", True))
+        name        = str(body.get("name", "")).strip()
+        wtype       = str(body.get("type", "generic")).strip()
+        url         = str(body.get("url", "")).strip()
+        severities  = body.get("severities", ["critical", "high", "medium", "low", "info"])
+        enabled     = bool(body.get("enabled", True))
+        allow_local = bool(body.get("allow_local", False))
         if not name or not url:
             self._json({"error": "name and url are required"}, 400); return
         if wtype not in ("slack", "discord", "generic"):
             self._json({"error": "type must be slack, discord, or generic"}, 400); return
-        self._json(self.wdb.create(name, wtype, url, severities, enabled), 201)
+        self._json(self.wdb.create(name, wtype, url, severities, enabled, allow_local), 201)
 
     def _webhook_update(self, wid: int):
         if not self.wdb.get(wid):
