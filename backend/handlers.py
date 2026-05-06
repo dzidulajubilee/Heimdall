@@ -4,6 +4,7 @@ Heimdall IDS Dashboard — HTTP Request Handler
 
 import json
 import logging
+import threading
 import time
 from http.cookies import SimpleCookie
 from http.server   import BaseHTTPRequestHandler
@@ -167,7 +168,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Security-Policy",
             "default-src 'self'; script-src 'self' 'unsafe-inline'; "
             "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
-            "connect-src 'self'; frame-ancestors 'none';")
+            "font-src 'self'; connect-src 'self'; frame-ancestors 'none';")
         if no_cache:
             self.send_header("Cache-Control", "no-cache")
         self.end_headers()
@@ -349,11 +350,16 @@ class Handler(BaseHTTPRequestHandler):
     # ── Static files ──────────────────────────────────────────────────────────
 
     _MIME = {
-        ".html": "text/html; charset=utf-8",
-        ".js":   "application/javascript",
-        ".jsx":  "application/javascript",
-        ".css":  "text/css",
-        ".ico":  "image/x-icon",
+        ".html":  "text/html; charset=utf-8",
+        ".js":    "application/javascript",
+        ".jsx":   "application/javascript",
+        ".css":   "text/css",
+        ".ico":   "image/x-icon",
+        ".png":   "image/png",
+        ".svg":   "image/svg+xml",
+        ".woff2": "font/woff2",
+        ".woff":  "font/woff",
+        ".ttf":   "font/ttf",
     }
 
     def _serve_static(self, url_path: str):
@@ -364,10 +370,12 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             self.send_error(403); return
         suffix = target.suffix.lower()
-        if suffix == ".jsx":  # never serve raw source
+        if suffix in (".jsx", ".py"):  # never serve raw source
             self.send_error(403); return
         ctype  = self._MIME.get(suffix, "application/octet-stream")
-        self._file(target, ctype, no_cache=suffix in (".html",))
+        font_exts = (".woff2", ".woff", ".ttf")
+        no_cache  = suffix in (".html",)
+        self._file(target, ctype, no_cache=no_cache)
 
     # ── Auth ─────────────────────────────────────────────────────────────────
 

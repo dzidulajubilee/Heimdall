@@ -8,7 +8,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-VERSION="${1:-0.3}"
+VERSION="${1:-0.4}"
 PKG="heimdall-ids_${VERSION}_all"
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 BUILD="${ROOT}/packaging/build/${PKG}"
@@ -97,6 +97,9 @@ cp "${ROOT}/frontend/index.html"      "${BUILD}/opt/heimdall/frontend/"
 cp "${ROOT}/frontend/login.html"      "${BUILD}/opt/heimdall/frontend/"
 cp "${ROOT}/frontend/login.js"        "${BUILD}/opt/heimdall/frontend/"
 cp "${ROOT}/frontend/skin-loader.js"  "${BUILD}/opt/heimdall/frontend/"
+mkdir -p "${BUILD}/opt/heimdall/frontend/fonts"
+cp "${ROOT}/frontend/fonts/"*.woff2   "${BUILD}/opt/heimdall/frontend/fonts/"
+cp "${ROOT}/frontend/fonts/fonts.css" "${BUILD}/opt/heimdall/frontend/fonts/"
 
 for skin in original chronicles mosaic seal; do
   cp "${ROOT}/frontend/skins/${skin}/app.js"      "${BUILD}/opt/heimdall/frontend/skins/${skin}/"
