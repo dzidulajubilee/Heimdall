@@ -1,0 +1,115 @@
+# ─────────────────────────────────────────────
+# Heimdall Threat Intel Feed (.htf)
+# One [entry] block per record, closed by ---
+# Either sig_id OR category must be non-empty
+# tags / refs = comma-separated
+# Lines starting with # are comments
+# ─────────────────────────────────────────────
+
+[entry]
+sig_id: 2100366
+sig_msg: GPL ICMP PING *NIX
+category: None
+explanation: This alert indicates that a device on the network sent a standard “ping” request. Such activity is common and typically harmless, often used for routine connectivity checks or monitoring. No action required unless the activity is frequent, originates from an unknown source, or coincides with other suspicious events.
+tags: 
+refs: 
+---
+
+[entry]
+sig_id: 2101411
+sig_msg: GPL SNMP public access udp
+category: None
+explanation: This alert indicates that a device is attempting to query network equipment using SNMP with the default “public” / "private" community string. In Simple Network Management Protocol, “public” is a well-known default that often allows read-only access to device information. While not an exploit by itself, this activity is commonly associated with reconnaissance. Attackers frequently use default SNMP strings to gather details about network devices (e.g., system info, interfaces, routing data). it may indicate someone probing your network for information, especially if the source is unfamiliar.
+tags: 
+refs: 
+---
+
+[entry]
+sig_id: 2027397
+sig_msg: ET INFO Spotify P2P Client
+category: None
+explanation: This alert indicates that a device on the network is using Spotify, which in some configurations can use peer-to-peer connections to stream or share cached music data between clients. However, because it involves P2P communication: It may bypass strict network controls It can consume bandwidth In rare cases, it may expose internal IP information externally
+tags: 
+refs: 
+---
+
+[entry]
+sig_id: 2210029
+sig_msg: SURICATA STREAM ESTABLISHED invalid ack
+category: None
+explanation: This alert means that a TCP packet acknowledged data in a way that doesn’t match the expected session state. In simple terms, something about the connection flow looked out of sync or malformed. Most of the time, this is not an attack. Common benign causes include: Packet loss or network instability Out-of-order packets Asymmetric routing (traffic taking different paths) Firewall/NAT devices altering traffic In some cases it can be linked to: Network scanning or probing tools Evasion techniques attempting to confuse IDS/IPS tracking Misconfigured or faulty network devices
+tags: 
+refs: 
+---
+
+[entry]
+sig_id: 2210045
+sig_msg: SURICATA STREAM Packet with invalid ack
+category: None
+explanation: This alert indicates that a TCP packet contains an acknowledgment number that does not align with the expected state of the connection. In short, the packet doesn’t “make sense” based on what’s been seen so far in that session.
+tags: 
+refs: 
+---
+
+[entry]
+sig_id: 2013504
+sig_msg: ET INFO GNU/Linux APT User-Agent Outbound likely related to package management
+category: None
+explanation: This alert indicates that a system on the network is using a Linux package manager (commonly apt on Debian/Ubuntu systems) to check for updates or download software packages. Assessment: This is normal and expected behavior for Linux systems performing: System updates (apt update, apt upgrade) Package installations or security patching It is generally benign and even desirable from a security standpoint, since it suggests systems may be staying up to date. When to look closer: The traffic originates from a device that should not be running Linux The destination repositories are unknown or untrusted Activity occurs at unusual times or in abnormal volumes
+tags: 
+refs: 
+---
+
+[entry]
+sig_id: 2210010
+sig_msg: SURICATA STREAM 3way handshake wrong seq wrong ack
+category: None
+explanation: This alert means the initial TCP connection setup (SYN → SYN/ACK → ACK) did not follow expected sequence/acknowledgment values. In simple terms, the connection establishment looked inconsistent or malformed.
+tags: 
+refs: 
+---
+
+[entry]
+sig_id: 2033078
+sig_msg: ET INFO Session Traversal Utilities for NAT (STUN Binding Request On Non-Standard High Port)
+category: None
+explanation: This alert indicates that a device on the network is attempting to discover its public IP address and NAT behavior using STUN, but doing so over an unusual (non-standard) port. This is typically benign and expected in modern networks. STUN is widely used by: VoIP applications (e.g., softphones) Video conferencing tools (Zoom, Teams, WebRTC apps) Real-time communication services
+tags: 
+refs: 
+---
+
+[entry]
+sig_id: 2260001
+sig_msg: SURICATA Applayer Wrong direction first Data
+category: None
+explanation: This alert means that the first data packet in a connection did not come from the expected side (e.g., the server sent data before the client request, or roles appeared reversed).
+tags: 
+refs: 
+---
+
+[entry]
+sig_id: 2210044
+sig_msg: SURICATA STREAM Packet with invalid timestamp
+category: None
+explanation: This alert means a packet included a TCP timestamp value that did not align with expected session behavior (e.g., timestamps going backward, jumping unexpectedly, or not matching prior packets).
+tags: 
+refs: 
+---
+
+[entry]
+sig_id: 2231000
+sig_msg: SURICATA QUIC failed decrypt
+category: None
+explanation: This alert means Suricata identified traffic using the **QUIC protocol (commonly used by modern HTTPS applications), but was unable to decrypt or properly inspect the payload.
+tags: 
+refs: 
+---
+
+[entry]
+sig_id: 2016150
+sig_msg: ET INFO Session Traversal Utilities for NAT (STUN Binding Response)
+category: None
+explanation: This alert indicates that a device received a response from a STUN server, which is used to help applications determine their public IP address and NAT mapping for peer-to-peer communication.
+tags: 
+refs: 
+---
