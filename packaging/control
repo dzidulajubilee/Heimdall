@@ -1,5 +1,5 @@
 Package: heimdall-ids
-Version: 3.0.1
+Version: 1.0.0
 Architecture: all
 Maintainer: Heimdall IDS <heimdall@localhost>
 Depends: python3 (>= 3.10)

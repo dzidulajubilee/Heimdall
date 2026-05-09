@@ -10,6 +10,7 @@ processing when eve.json is re-opened after rotation or a restart.
 import json
 import logging
 import os
+import threading
 import time
 from collections import deque
 
@@ -270,6 +271,88 @@ def tail_thread(path: str, db, dns_db, registry, wdb=None):
         except OSError as exc:
             log.warning("Cannot open %s: %s — retrying in 3 s.", path, exc)
             time.sleep(3)
+
+
+# ── Replay state ─────────────────────────────────────────────────────────────
+
+_replay_lock  = threading.Lock()
+_replay_state = {
+    "running":   False,
+    "inserted":  0,
+    "skipped":   0,
+    "total":     0,
+    "error":     None,
+    "done":      False,
+}
+
+def get_replay_status() -> dict:
+    with _replay_lock:
+        return dict(_replay_state)
+
+def _set_replay(field: str, value):
+    with _replay_lock:
+        _replay_state[field] = value
+
+def replay_thread(path: str, db, dns_db):
+    """
+    Read eve.json from the very beginning and insert any events
+    not already in the database. Runs as a daemon thread so the
+    dashboard stays usable during replay.
+    """
+    with _replay_lock:
+        if _replay_state["running"]:
+            return   # already in progress
+        _replay_state.update({"running": True, "inserted": 0,
+                               "skipped": 0,   "total":    0,
+                               "error":   None, "done":    False})
+    log.info("Replay started — reading %s from beginning.", path)
+    inserted = skipped = total = 0
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for raw_line in f:
+                total += 1
+                if total % 10000 == 0:
+                    with _replay_lock:
+                        _replay_state["total"]    = total
+                        _replay_state["inserted"] = inserted
+                        _replay_state["skipped"]  = skipped
+                etype, parsed = parse_eve_line(raw_line)
+                if etype is None:
+                    skipped += 1
+                    continue
+                if etype == "alert":
+                    if db.alert_exists(parsed["id"]):
+                        skipped += 1
+                    else:
+                        db.insert(parsed)
+                        inserted += 1
+                elif etype == "flow":
+                    # flows have no stable unique ID — skip duplicates by count heuristic
+                    db.insert_flow(parsed)
+                    inserted += 1
+                elif etype == "dns":
+                    dns_db.insert(parsed)
+                    inserted += 1
+                elif etype == "http":
+                    db.insert_http(parsed)
+                    inserted += 1
+                else:
+                    skipped += 1
+        log.info("Replay done — %d lines read, %d inserted, %d skipped.",
+                 total, inserted, skipped)
+    except Exception as exc:
+        log.error("Replay error: %s", exc)
+        with _replay_lock:
+            _replay_state["error"] = str(exc)
+    finally:
+        with _replay_lock:
+            _replay_state.update({
+                "running":  False,
+                "inserted": inserted,
+                "skipped":  skipped,
+                "total":    total,
+                "done":     True,
+            })
 
 
 def purge_thread(db, dns_db, auth):

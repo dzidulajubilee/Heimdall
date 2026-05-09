@@ -139,15 +139,16 @@ def main():
     cfg_db._conn().commit()
 
     # ── Wire dependencies into the handler ────────────────────────────────────
-    Handler.db       = db
-    Handler.dns_db   = dns_db
-    Handler.auth     = auth
-    Handler.registry = registry
-    Handler.wdb      = wdb
-    Handler.um       = um
-    Handler.ti_db    = ti_db
-    Handler.sup_db   = sup_db
-    Handler.ai_db    = ai_db
+    Handler.db        = db
+    Handler.dns_db    = dns_db
+    Handler.auth      = auth
+    Handler.registry  = registry
+    Handler.wdb       = wdb
+    Handler.um        = um
+    Handler.ti_db     = ti_db
+    Handler.sup_db    = sup_db
+    Handler.ai_db     = ai_db
+    Handler._eve_path = args.eve        # needed by replay
 
     # ── Log DB state ──────────────────────────────────────────────────────────
     s = db.stats()

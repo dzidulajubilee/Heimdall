@@ -17,6 +17,7 @@ from collections   import defaultdict
 _LOGIN_FAILS:  dict = defaultdict(list)   # ip -> [timestamp, ...]
 _LOGIN_WINDOW  = 300   # seconds
 _LOGIN_MAX     = 10    # max failures per window
+_LOGIN_MAX_IPS = 8_000 # cap dict size against memory-exhaustion from unique-IP floods
 _LOGIN_LOCK    = threading.Lock()
 
 def _check_rate_limit(ip: str) -> bool:
@@ -28,9 +29,16 @@ def _check_rate_limit(ip: str) -> bool:
         return len(attempts) >= _LOGIN_MAX
 
 def _record_failure(ip: str):
-    """Record a failed login attempt for ip."""
+    """Record a failed login attempt for ip, pruning the dict if it grows too large."""
     with _LOGIN_LOCK:
         _LOGIN_FAILS[ip].append(time.time())
+        # Prune stale IPs when the dict exceeds the cap
+        if len(_LOGIN_FAILS) > _LOGIN_MAX_IPS:
+            now = time.time()
+            stale = [k for k, v in _LOGIN_FAILS.items()
+                     if not any(t for t in v if now - t < _LOGIN_WINDOW)]
+            for k in stale:
+                del _LOGIN_FAILS[k]
 
 def _clear_failures(ip: str):
     """Clear failures on successful login."""
@@ -49,17 +57,33 @@ import ai_explain as _ai
 
 class Handler(BaseHTTPRequestHandler):
 
-    db       = None
-    auth     = None
-    registry = None
-    wdb      = None
-    um       = None
-    ti_db    = None
-    sup_db   = None
-    ai_db    = None
+    db        = None
+    auth      = None
+    registry  = None
+    wdb       = None
+    um        = None
+    ti_db     = None
+    sup_db    = None
+    ai_db     = None
+    _eve_path = None   # set by server.py at startup; used by replay
 
     server_version = ""
     sys_version    = ""
+
+    def handle_one_request(self):
+        """Override to catch unhandled exceptions and return clean 500s."""
+        try:
+            super().handle_one_request()
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # client disconnected mid-response — normal
+        except Exception:
+            log.exception("Unhandled exception in %s %s",
+                          getattr(self, "command", "?"),
+                          getattr(self, "path", "?"))
+            try:
+                self._json({"error": "Internal server error"}, 500)
+            except Exception:
+                pass  # response already started
 
     def log_message(self, fmt, *args):
         first = str(args[0]) if args else ""
@@ -110,7 +134,9 @@ class Handler(BaseHTTPRequestHandler):
         p = urlparse(self.path).path
         api_paths = ("/alerts", "/flows", "/dns", "/http", "/events",
                      "/health", "/charts", "/webhooks", "/users", "/me",
-                     "/threat-intel", "/suppression", "/ai-config", "/ai-explain")
+                     "/threat-intel", "/suppression", "/ai-config", "/ai-explain",
+                     "/replay", "/flush",
+                     "/threat-intel/export", "/threat-intel/import")
         if p.startswith("/frontend/") and p not in self._PUBLIC_FRONTEND:
             self._json({"error": "Unauthorized"}, 401)
         elif any(p.startswith(x) for x in api_paths):
@@ -169,6 +195,7 @@ class Handler(BaseHTTPRequestHandler):
             "default-src 'self'; script-src 'self' 'unsafe-inline'; "
             "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
             "font-src 'self'; connect-src 'self'; frame-ancestors 'none';")
+        self.send_header("X-Robots-Tag", "noindex, nofollow")
         if no_cache:
             self.send_header("Cache-Control", "no-cache")
         self.end_headers()
@@ -242,6 +269,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"users": self.um.get_all()})
         elif p.path == "/threat-intel":
             self._json(self.ti_db.get_all())
+        elif p.path == "/threat-intel/export":
+            self._export_htf()
         elif p.path == "/threat-intel/lookup":
             sid = qs.get("sig_id", [None])[0]
             cat = qs.get("category", [None])[0]
@@ -260,6 +289,9 @@ class Handler(BaseHTTPRequestHandler):
                 "enabled":     s["enabled"],
                 "api_key_set": s["api_key_set"],
             })
+        elif p.path == "/replay/status":
+            from tail import get_replay_status
+            self._json(get_replay_status())
         elif p.path == "/health":
             s = self.db.stats()
             s["dns"] = {"total": self.dns_db.count(), "recent": self.dns_db.count_recent()}
@@ -285,6 +317,10 @@ class Handler(BaseHTTPRequestHandler):
             self._set_skin()
         elif p.path == "/ai-explain":
             self._ai_explain()
+        elif p.path == "/replay":
+            self._start_replay()
+        elif p.path == "/flush":
+            self._flush_all()
         elif p.path == "/webhooks":
             self._webhook_create()
         elif p.path == "/alerts/bulk-status":
@@ -306,6 +342,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._webhook_test(wid)
             except (ValueError, IndexError):
                 self.send_error(400)
+        elif p.path == "/threat-intel":
+            self._ti_create()
+        elif p.path == "/threat-intel/import":
+            self._import_htf()
+        elif p.path == "/suppression":
+            self._sup_create()
         else:
             self.send_error(404)
 
@@ -319,6 +361,12 @@ class Handler(BaseHTTPRequestHandler):
             except (ValueError, IndexError): self.send_error(400)
         elif p.path.startswith("/webhooks/"):
             try:   self._webhook_update(int(p.path.split("/")[2]))
+            except (ValueError, IndexError): self.send_error(400)
+        elif p.path.startswith("/threat-intel/"):
+            try:   self._ti_update(int(p.path.split("/")[2]))
+            except (ValueError, IndexError): self.send_error(400)
+        elif p.path.startswith("/suppression/"):
+            try:   self._sup_update(int(p.path.split("/")[2]))
             except (ValueError, IndexError): self.send_error(400)
         else:
             self.send_error(404)
@@ -343,6 +391,12 @@ class Handler(BaseHTTPRequestHandler):
                 wid = int(p.path.split("/")[2])
                 self.wdb.delete(wid)
                 self._json({"deleted": wid})
+            except (ValueError, IndexError): self.send_error(400)
+        elif p.path.startswith("/threat-intel/"):
+            try:   self._ti_delete(int(p.path.split("/")[2]))
+            except (ValueError, IndexError): self.send_error(400)
+        elif p.path.startswith("/suppression/"):
+            try:   self._sup_delete(int(p.path.split("/")[2]))
             except (ValueError, IndexError): self.send_error(400)
         else:
             self.send_error(404)
@@ -384,8 +438,8 @@ class Handler(BaseHTTPRequestHandler):
         if err: return
         ip       = self.address_string()
         if _check_rate_limit(ip):
-            log.warning("Rate limited login from %s", ip)
-            time.sleep(2)
+            log.warning("Rate limited login attempt from %s", ip)
+            time.sleep(2)   # constant-time response regardless of cause
             self._json({"error": "Too many failed attempts. Try again later."}, 429); return
 
         username = body.get("username", "").strip()
@@ -430,9 +484,12 @@ class Handler(BaseHTTPRequestHandler):
     # ── Alert endpoints ───────────────────────────────────────────────────────
 
     def _serve_alerts(self, qs: dict):
-        days  = self._qs_int(qs, "days",  RETAIN_DAYS, 1, RETAIN_DAYS)
-        limit = self._qs_int(qs, "limit", 5000,         1, 20000)
-        self._send_json_body({"alerts": self.db.fetch_recent(days=days, limit=limit)})
+        days   = self._qs_int(qs, "days",   RETAIN_DAYS, 1, RETAIN_DAYS)
+        limit  = self._qs_int(qs, "limit",  300, 1, 1000)
+        offset = self._qs_int(qs, "offset", 0,   0, 10_000_000)
+        alerts, total = self.db.fetch_recent(days=days, limit=limit, offset=offset)
+        self._send_json_body({"alerts": alerts, "total": total,
+                              "offset": offset, "limit": limit})
 
     def _set_alert_status(self, alert_id: str):
         if not self._require_role("admin", "analyst"): return
@@ -620,10 +677,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def _serve_sse(self):
         self.send_response(200)
-        self.send_header("Content-Type",      "text/event-stream")
-        self.send_header("Cache-Control",     "no-cache")
-        self.send_header("Connection",        "keep-alive")
-        self.send_header("X-Accel-Buffering", "no")
+        self.send_header("Content-Type",          "text/event-stream")
+        self.send_header("Cache-Control",          "no-cache")
+        self.send_header("Connection",             "keep-alive")
+        self.send_header("X-Accel-Buffering",      "no")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options",        "DENY")
+        self.send_header("X-Robots-Tag",           "noindex, nofollow")
         self.end_headers()
 
         cid, q = self.registry.add()
@@ -721,12 +781,39 @@ class Handler(BaseHTTPRequestHandler):
             log.warning("AI explain error: %s", exc)
             self._json({"error": str(exc)}, 502)
 
+    # ── Replay & Flush ───────────────────────────────────────────────────────
+
+    def _start_replay(self):
+        """POST /replay — start background replay of eve.json. Admin only."""
+        if not self._require_role("admin"): return
+        from tail import get_replay_status, replay_thread
+        import threading as _th
+        status = get_replay_status()
+        if status["running"]:
+            self._json({"ok": False, "error": "Replay already in progress"}); return
+        cfg = self.auth.__class__  # reach eve path via server config
+        eve_path = Handler._eve_path
+        t = _th.Thread(
+            target=replay_thread,
+            args=(eve_path, self.db, self.dns_db),
+            daemon=True,
+        )
+        t.start()
+        self._json({"ok": True, "message": "Replay started"})
+
+    def _flush_all(self):
+        """POST /flush — wipe all ingested event records. Admin only."""
+        if not self._require_role("admin"): return
+        counts = self.db.flush_all_records(self.dns_db)
+        log.info("flush_all: %s", counts)
+        self._json({"ok": True, "deleted": counts})
+
     # ── Threat Intel ──────────────────────────────────────────────────────────
 
     def _ti_create(self):
         if not self._require_role('admin', 'analyst'): return
-        body = self._read_json()
-        if body is None: return
+        body, err = self._read_json()
+        if err: return
         explanation = str(body.get('explanation', '')).strip()
         if not explanation:
             self._json({'error': 'explanation is required'}, 400); return
@@ -745,8 +832,8 @@ class Handler(BaseHTTPRequestHandler):
         if not self._require_role('admin', 'analyst'): return
         if not self.ti_db.get_by_id(tid):
             self._json({'error': 'Not found'}, 404); return
-        body = self._read_json()
-        if body is None: return
+        body, err = self._read_json()
+        if err: return
         self._json(self.ti_db.update(tid, **body))
 
     def _ti_delete(self, tid):
@@ -756,12 +843,38 @@ class Handler(BaseHTTPRequestHandler):
         self.ti_db.delete(tid)
         self._json({'deleted': tid})
 
+    def _export_htf(self):
+        """GET /threat-intel/export — download all entries as a .htf file."""
+        text = self.ti_db.export_htf()
+        data = text.encode('utf-8')
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/plain; charset=utf-8')
+        self.send_header('Content-Length', str(len(data)))
+        self.send_header('Content-Disposition',
+                         'attachment; filename="heimdall-threat-intel.htf"')
+        self.send_header('Cache-Control', 'no-cache')
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _import_htf(self):
+        """POST /threat-intel/import — parse .htf text and bulk-insert entries."""
+        if not self._require_role('admin', 'analyst'): return
+        body, err = self._read_json()
+        if err: return
+        content = body.get('content', '')
+        if not isinstance(content, str) or not content.strip():
+            self._json({'error': 'content field is required'}, 400); return
+        s      = self._session()
+        user   = s['username'] if s else 'import'
+        result = self.ti_db.import_htf(content, imported_by=user)
+        self._json(result, 200)
+
     # ── Suppression ───────────────────────────────────────────────────────────
 
     def _sup_create(self):
         if not self._require_role('admin'): return
-        body = self._read_json()
-        if body is None: return
+        body, err = self._read_json()
+        if err: return
         name     = str(body.get('name', '')).strip()
         sig_id   = body.get('sig_id')
         src_ip   = str(body.get('src_ip',   '')).strip() or None
@@ -782,8 +895,8 @@ class Handler(BaseHTTPRequestHandler):
         if not self._require_role('admin'): return
         if not self.sup_db.get_by_id(rule_id):
             self._json({'error': 'Not found'}, 404); return
-        body = self._read_json()
-        if body is None: return
+        body, err = self._read_json()
+        if err: return
         self._json(self.sup_db.update(rule_id, **body))
 
     def _sup_delete(self, rule_id):

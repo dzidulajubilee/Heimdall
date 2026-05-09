@@ -37,6 +37,8 @@ class ConfigDB:
             c.row_factory = sqlite3.Row
             c.execute("PRAGMA journal_mode = WAL")
             c.execute("PRAGMA synchronous  = NORMAL")
+            c.execute("PRAGMA cache_size   = -4000")  # 4 MB page cache
+            c.execute("PRAGMA temp_store   = MEMORY")
             c.commit()
             self._local.conn = c
         return self._local.conn

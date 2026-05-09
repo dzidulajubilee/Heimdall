@@ -161,26 +161,63 @@ class AlertDB:
                  alert.get("severity", "info"), alert.get("action", "allowed"),
                  json.dumps(alert.get("raw", {}))))
             c.commit()
+            self.invalidate_count_cache()
         except sqlite3.Error as e:
             log.warning("DB insert (alert): %s", e)
 
-    def fetch_recent(self, days=None, limit=5000):
+    # ── COUNT cache (5-second TTL) ────────────────────────────────────────────
+    _count_cache:       int   = 0
+    _count_cache_ts:    float = 0.0
+    _count_cache_lock         = threading.Lock()
+    _COUNT_CACHE_TTL:   int   = 5
+
+    def count_alerts(self, days: int = None) -> int:
+        """Return total alert count. Cached for 5 seconds to avoid COUNT(*) on every paginated request."""
+        now = time.time()
+        with self._count_cache_lock:
+            if now - self._count_cache_ts < self._COUNT_CACHE_TTL:
+                return self._count_cache
+        cutoff = now - (days or self.retain_days) * 86400
+        n = self._conn().execute(
+            "SELECT COUNT(*) FROM alerts WHERE ts_epoch>=?", (cutoff,)
+        ).fetchone()[0]
+        with self._count_cache_lock:
+            self._count_cache    = n
+            self._count_cache_ts = now
+        return n
+
+    def invalidate_count_cache(self):
+        """Call after inserts/deletes that change alert count."""
+        with self._count_cache_lock:
+            self._count_cache_ts = 0.0
+
+    def alert_exists(self, alert_id: str) -> bool:
+        """Fast existence check — used by replay to skip known alerts."""
+        return bool(
+            self._conn().execute(
+                "SELECT 1 FROM alerts WHERE id=? LIMIT 1", (alert_id,)
+            ).fetchone()
+        )
+
+    def fetch_recent(self, days=None, limit=300, offset=0):
+        """Return (alerts_list, total_count). Paginated with LIMIT/OFFSET."""
         cutoff = time.time() - (days or self.retain_days) * 86400
-        rows = self._conn().execute(
+        total  = self.count_alerts(days=days)
+        rows   = self._conn().execute(
             """SELECT a.id,a.ts,a.src_ip,a.src_port,a.dst_ip,a.dst_port,a.proto,a.iface,
                       a.flow_id,a.sig_id,a.sig_msg,a.category,a.severity,a.action,a.raw_json,
                       m.status, m.updated_by, m.updated_at
                FROM alerts a
                LEFT JOIN alert_meta m ON m.alert_id = a.id
-               WHERE a.ts_epoch>=? ORDER BY a.ts_epoch DESC LIMIT ?""",
-            (cutoff, limit)).fetchall()
+               WHERE a.ts_epoch>=? ORDER BY a.ts_epoch DESC LIMIT ? OFFSET ?""",
+            (cutoff, limit, offset)).fetchall()
         result = []
         for row in rows:
             d = dict(row)
             try:    d["raw"] = json.loads(d.pop("raw_json", "{}"))
             except: d["raw"] = {}
             result.append(d)
-        return result
+        return result, total
 
     # ── Alert meta: status + notes ────────────────────────────────────────────
 
@@ -403,6 +440,36 @@ class AlertDB:
         c.commit()
         log.info("Flows cleared — %d rows deleted.", cur.rowcount)
         return cur.rowcount
+
+    def flush_all_records(self, dns_db) -> dict:
+        """
+        Wipe every ingested event from the DB.
+        alerts + alert_meta + alert_notes + alert_activity + flows + http_events + dns
+        The eve.json file and Suricata are untouched.
+        Returns row counts deleted per table.
+        """
+        c = self._conn()
+        counts = {}
+        for tbl in ("alert_activity", "alert_notes", "alert_meta"):
+            cur = c.execute(f"DELETE FROM {tbl}")
+            counts[tbl] = cur.rowcount
+        cur = c.execute("DELETE FROM alerts")
+        counts["alerts"] = cur.rowcount
+        cur = c.execute("DELETE FROM flows")
+        counts["flows"]  = cur.rowcount
+        cur = c.execute("DELETE FROM http_events")
+        counts["http"]   = cur.rowcount
+        c.commit()
+        self.invalidate_count_cache()
+        # DNS is a separate database
+        dc = dns_db._conn()
+        cur = dc.execute("DELETE FROM dns_queries")
+        counts["dns"] = cur.rowcount
+        dc.commit()
+        total = counts["alerts"] + counts["flows"] + counts["http"] + counts["dns"]
+        log.info("flush_all_records: deleted %d total rows (%s).", total,
+                 ", ".join(f"{v} {k}" for k, v in counts.items()))
+        return counts
 
     # ── Chart data ────────────────────────────────────────────────────────────
 

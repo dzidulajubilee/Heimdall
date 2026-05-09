@@ -125,7 +125,7 @@ function BentoStrip({ alerts, dbStats, sparkData }) {
     <div className="bento-strip">
       <div className="bento-cell">
         <div className="bc-label">Total alerts</div>
-        <div className="bc-value">{alerts.length}</div>
+        <div className="bc-value">{alerts.length.toLocaleString()}<span style={{fontSize:10,color:"var(--tx3)",marginLeft:4}}>/ {(dbStats?.alerts || 0).toLocaleString()}</span></div>
         <div className="bc-sub">
           {counts.critical > 0
             ? <span className="bc-badge warn">{counts.critical} critical</span>
@@ -963,7 +963,7 @@ function UserModal({ initial, onSave, onClose }) {
 }
 
 // ── Settings view ─────────────────────────────────────────────────────────────
-function SettingsView({ theme, setTheme, role, username, onLogout }) {
+function SettingsView({ theme, setTheme, role, username, onLogout, onDataFlushed }) {
   const [users,setUsers]=useState([]);
   const [health,setHealth]=useState(null);
   const [modal,setModal]=useState(null);
@@ -1105,6 +1105,9 @@ function SettingsView({ theme, setTheme, role, username, onLogout }) {
           </div>
         </div>
       </div>)}
+      {/* Replay / Flush */}
+      {isAdmin && <ReplayFlushPanel onFlushed={onDataFlushed}/>}
+
       <div className="settings-card">
         <div className="settings-card-header"><span className="settings-card-title">Account</span></div>
         <div className="settings-card-body">
@@ -1520,14 +1523,182 @@ function TIEditForm({ alert: a, existing, role, onSaved, onCancel }) {
 }
 
 // ── ThreatIntelView — full settings-style page ─────────────────────────────────
+// ── TIEntryForm — standalone create/edit (no alert context needed) ─────────────
+function TIEntryForm({ initial, onSaved, onCancel }) {
+  const isEdit = Boolean(initial?.id);
+
+  const [sigId,       setSigId]       = useState(initial?.sig_id   || '');
+  const [sigMsg,      setSigMsg]      = useState(initial?.sig_msg   || '');
+  const [category,    setCategory]    = useState(initial?.category  || '');
+  const [explanation, setExplanation] = useState(initial?.explanation || '');
+  const [tagInput,    setTagInput]    = useState('');
+  const [tags,        setTags]        = useState(initial?.tags || []);
+  const [refInput,    setRefInput]    = useState('');
+  const [refs,        setRefs]        = useState(initial?.refs || []);
+  const [saving,      setSaving]      = useState(false);
+  const [err,         setErr]         = useState('');
+
+  function addTag() {
+    const t = tagInput.trim();
+    if (t && !tags.includes(t)) setTags(p => [...p, t]);
+    setTagInput('');
+  }
+  function addRef() {
+    const r = refInput.trim();
+    if (r && !refs.includes(r)) setRefs(p => [...p, r]);
+    setRefInput('');
+  }
+
+  async function save() {
+    if (!sigId && !category.trim()) { setErr('Enter a SID or a category'); return; }
+    if (!explanation.trim())         { setErr('Explanation is required');   return; }
+    setSaving(true); setErr('');
+    const body = {
+      sig_id:      sigId ? parseInt(sigId, 10) : null,
+      sig_msg:     sigMsg.trim() || null,
+      category:    category.trim() || null,
+      explanation: explanation.trim(),
+      tags, refs,
+    };
+    const method   = isEdit ? 'PUT'  : 'POST';
+    const endpoint = isEdit ? `/threat-intel/${initial.id}` : '/threat-intel';
+    try {
+      const r = await fetch(endpoint, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const d = await r.json();
+      if (!r.ok) { setErr(d.error || 'Save failed'); return; }
+      onSaved(d);
+    } catch { setErr('Network error'); }
+    finally { setSaving(false); }
+  }
+
+  const inp = {
+    width:'100%', padding:'7px 10px', background:'var(--s2)',
+    border:'1px solid var(--ln)', borderRadius:'var(--radius-sm,4px)',
+    color:'var(--tx1)', fontSize:12, outline:'none', boxSizing:'border-box',
+  };
+  const lbl = {
+    fontSize:9, fontWeight:600, letterSpacing:'.09em', textTransform:'uppercase',
+    color:'var(--tx3)', display:'block', marginBottom:5,
+  };
+
+  return (
+    <div style={{ background:'var(--s1)', border:'1px solid var(--ln)',
+                  borderRadius:'var(--radius-lg,10px)', padding:'16px 18px', marginBottom:14 }}>
+      <div style={{ fontSize:12, fontWeight:600, color:'var(--tx1)', marginBottom:14 }}>
+        {isEdit ? 'Edit Entry' : 'New Entry'}
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'1fr 2fr', gap:12, marginBottom:12 }}>
+        <div>
+          <label style={lbl}>SID (sig_id)</label>
+          <input style={inp} type="number" placeholder="e.g. 2024897"
+                 value={sigId} onChange={e => setSigId(e.target.value)}/>
+        </div>
+        <div>
+          <label style={lbl}>Signature Name (optional)</label>
+          <input style={inp} placeholder="e.g. ET SCAN Nmap"
+                 value={sigMsg} onChange={e => setSigMsg(e.target.value)}/>
+        </div>
+      </div>
+
+      <div style={{ marginBottom:12 }}>
+        <label style={lbl}>Category (fallback if no SID)</label>
+        <input style={inp} placeholder="e.g. Web Application Attack"
+               value={category} onChange={e => setCategory(e.target.value)}/>
+      </div>
+
+      <div style={{ marginBottom:12 }}>
+        <label style={lbl}>Explanation *</label>
+        <textarea style={{ ...inp, minHeight:100, resize:'vertical', lineHeight:1.65 }}
+          placeholder="What does this alert mean? What likely triggered it? Recommended action?"
+          value={explanation} onChange={e => setExplanation(e.target.value)}/>
+      </div>
+
+      <div style={{ marginBottom:12 }}>
+        <label style={lbl}>Tags</label>
+        <div style={{ display:'flex', flexWrap:'wrap', gap:5, marginBottom:6 }}>
+          {tags.map(t => (
+            <span key={t} style={{ display:'inline-flex', alignItems:'center', gap:4,
+              padding:'2px 8px', borderRadius:20, fontSize:11,
+              background:'var(--s2)', border:'1px solid var(--ln)',
+              color:'var(--tx2)', fontFamily:'var(--mono)' }}>
+              {t}
+              <span onClick={() => setTags(p => p.filter(x => x !== t))}
+                    style={{ cursor:'pointer', color:'var(--tx3)', marginLeft:2 }}>×</span>
+            </span>
+          ))}
+        </div>
+        <div style={{ display:'flex', gap:6 }}>
+          <input style={{ ...inp, flex:1 }} placeholder="scanning, recon, c2…"
+                 value={tagInput} onChange={e => setTagInput(e.target.value)}
+                 onKeyDown={e => { if (e.key==='Enter') { e.preventDefault(); addTag(); } }}/>
+          <button onClick={addTag} style={{ padding:'6px 12px', border:'1px solid var(--ln)',
+            borderRadius:'var(--radius-sm,4px)', background:'transparent',
+            color:'var(--tx2)', fontSize:11, cursor:'pointer' }}>Add</button>
+        </div>
+      </div>
+
+      <div style={{ marginBottom:14 }}>
+        <label style={lbl}>References</label>
+        <div style={{ display:'flex', flexDirection:'column', gap:4, marginBottom:6 }}>
+          {refs.map(r => (
+            <div key={r} style={{ display:'flex', alignItems:'center', gap:8 }}>
+              <span style={{ flex:1, fontFamily:'var(--mono)', fontSize:11, color:'var(--accent)',
+                overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r}</span>
+              <span onClick={() => setRefs(p => p.filter(x => x !== r))}
+                    style={{ cursor:'pointer', color:'var(--tx3)', fontSize:13 }}>×</span>
+            </div>
+          ))}
+        </div>
+        <div style={{ display:'flex', gap:6 }}>
+          <input style={{ ...inp, flex:1, fontFamily:'var(--mono)', fontSize:11 }}
+                 placeholder="https://…"
+                 value={refInput} onChange={e => setRefInput(e.target.value)}
+                 onKeyDown={e => { if (e.key==='Enter') { e.preventDefault(); addRef(); } }}/>
+          <button onClick={addRef} style={{ padding:'6px 12px', border:'1px solid var(--ln)',
+            borderRadius:'var(--radius-sm,4px)', background:'transparent',
+            color:'var(--tx2)', fontSize:11, cursor:'pointer' }}>Add</button>
+        </div>
+      </div>
+
+      {err && (
+        <div style={{ marginBottom:10, padding:'7px 10px', fontSize:12,
+          background:'rgba(240,84,84,.1)', border:'1px solid var(--danger,#f05454)',
+          borderRadius:'var(--radius-sm,4px)', color:'var(--danger,#f05454)' }}>{err}</div>
+      )}
+
+      <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
+        <button onClick={onCancel} disabled={saving} style={{ padding:'5px 14px',
+          border:'1px solid var(--ln)', borderRadius:'var(--radius-sm,4px)',
+          background:'transparent', color:'var(--tx2)', fontSize:12, cursor:'pointer' }}>
+          Cancel
+        </button>
+        <button onClick={save} disabled={saving} style={{ padding:'5px 18px',
+          border:'1px solid var(--accent)', borderRadius:'var(--radius-sm,4px)',
+          background:'transparent', color:'var(--accent)', fontSize:12,
+          cursor: saving ? 'wait' : 'pointer' }}>
+          {saving ? 'Saving…' : isEdit ? 'Save Changes' : 'Create Entry'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function ThreatIntelView({ role }) {
-  const [entries,  setEntries]  = useState([]);
-  const [gaps,     setGaps]     = useState([]);
-  const [loading,  setLoading]  = useState(true);
-  const [tab,      setTab]      = useState('entries');
-  const [showForm, setShowForm] = useState(false);
-  const [editing,  setEditing]  = useState(null);
-  const [delId,    setDelId]    = useState(null);
+  const [entries,     setEntries]     = useState([]);
+  const [gaps,        setGaps]        = useState([]);
+  const [loading,     setLoading]     = useState(true);
+  const [tab,         setTab]         = useState('entries');
+  const [showForm,    setShowForm]    = useState(false);
+  const [editing,     setEditing]     = useState(null);
+  const [delId,       setDelId]       = useState(null);
+  const [importing,   setImporting]   = useState(false);
+  const [importResult,setImportResult]= useState(null);
+  const fileInputRef  = React.useRef(null);
   const canWrite = role==='admin'||role==='analyst';
 
   function load() {
@@ -1548,306 +1719,286 @@ function ThreatIntelView({ role }) {
     setDelId(null); load();
   }
 
+  function handleExport() {
+    window.location.href = '/threat-intel/export';
+  }
+
+  async function handleImportFile(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    e.target.value = '';
+    setImporting(true); setImportResult(null);
+    try {
+      const text = await file.text();
+      const r    = await fetch('/threat-intel/import', {
+        method:  'POST',
+        headers: {'Content-Type':'application/json'},
+        body:    JSON.stringify({ content: text }),
+      });
+      const d = await r.json();
+      setImportResult(d);
+      if (d.imported > 0) load();
+    } catch(err) {
+      setImportResult({ imported:0, skipped:0, errors:[String(err)], warnings:[] });
+    }
+    setImporting(false);
+  }
+
   const fmtDate = ts => new Date(ts*1000).toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'});
 
-  const sectionStyle = { padding:'20px 24px', maxWidth:900 };
-  const cardStyle = { background:'var(--s1)', border:'1px solid var(--ln)',
-    borderRadius:'var(--radius-lg,10px)', padding:'14px 16px', marginBottom:10 };
-  const tabBtnStyle = active => ({
+  // ── Styles ────────────────────────────────────────────────────────────────
+  const sectionStyle  = { padding:'20px 24px', width:'100%', boxSizing:'border-box' };
+  const innerStyle    = { maxWidth:1100, margin:'0 auto' };
+  const cardStyle     = {
+    background:'var(--s1)', border:'1px solid var(--ln)',
+    borderRadius:'var(--radius-lg,10px)', padding:'14px 16px', marginBottom:10
+  };
+  const tabBtnStyle   = active => ({
     padding:'4px 14px', border:'none', cursor:'pointer', fontSize:11,
     fontFamily:'var(--mono)', borderRadius:'var(--radius-sm,4px)',
     background: active ? 'var(--accent)' : 'transparent',
     color: active ? 'white' : 'var(--tx3)',
   });
+  const actnBtn = (color) => ({
+    display:'flex', alignItems:'center', gap:5, padding:'4px 12px',
+    border:`1px solid ${color || 'var(--ln)'}`, borderRadius:'var(--radius-sm,4px)',
+    background:'transparent', color: color || 'var(--tx2)',
+    fontSize:11, fontFamily:'var(--mono)', cursor:'pointer', flexShrink:0,
+  });
 
   return (
     <div style={{ overflowY:'auto', flex:1 }}>
-      {/* Sub-tab bar */}
+      {/* Tab + action bar */}
       <div style={{ display:'flex', alignItems:'center', gap:8, padding:'10px 24px',
-                    borderBottom:'1px solid var(--ln)', background:'var(--s1)', flexShrink:0 }}>
+                    borderBottom:'1px solid var(--ln)', background:'var(--s1)',
+                    flexShrink:0, flexWrap:'wrap', rowGap:8 }}>
         <div style={{ display:'flex', gap:2, background:'var(--s2)',
                       border:'1px solid var(--ln)', borderRadius:'var(--radius-sm,4px)', padding:2 }}>
           <button style={tabBtnStyle(tab==='entries')} onClick={()=>setTab('entries')}>
-            Explanations ({entries.length})
+            Entries ({entries.length})
           </button>
           <button style={tabBtnStyle(tab==='gaps')} onClick={()=>setTab('gaps')}>
-            Coverage Gaps ({gaps.length})
+            Gaps ({gaps.length})
           </button>
         </div>
-        {canWrite && tab==='entries' && (
-          <button onClick={()=>{ setEditing(null); setShowForm(true); }} style={{
-            marginLeft:'auto', padding:'5px 14px', cursor:'pointer',
-            border:'1px solid var(--accent)', borderRadius:'var(--radius-sm,4px)',
-            background:'transparent', color:'var(--accent)', fontSize:12 }}>
-            + Add Explanation
-          </button>
-        )}
+
+        <div style={{ marginLeft:'auto', display:'flex', gap:6, alignItems:'center', flexWrap:'wrap' }}>
+          {/* Export */}
+          {entries.length > 0 && (
+            <button style={actnBtn('var(--accent)')} onClick={handleExport} title="Download all entries as .htf">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                <polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+              </svg>
+              Export .htf
+            </button>
+          )}
+
+          {/* Import */}
+          {canWrite && (
+            <>
+              <input
+                ref={fileInputRef} type="file" accept=".htf,.txt"
+                style={{ display:'none' }} onChange={handleImportFile}
+              />
+              <button style={actnBtn(importing ? 'var(--tx3)' : 'var(--teal,#0D9488)')}
+                      disabled={importing}
+                      onClick={() => fileInputRef.current?.click()}
+                      title="Import entries from a .htf file">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                  <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
+                </svg>
+                {importing ? 'Importing…' : 'Import .htf'}
+              </button>
+            </>
+          )}
+
+          {/* Add entry */}
+          {canWrite && !showForm && tab==='entries' && (
+            <button style={actnBtn()} onClick={()=>{setShowForm(true);setEditing(null);}}>
+              + Add Entry
+            </button>
+          )}
+        </div>
       </div>
 
-      <div style={sectionStyle}>
-        {/* Info banner */}
-        <div style={{ marginBottom:16, padding:'10px 14px', fontSize:12,
-                      color:'var(--tx2)', lineHeight:1.7,
-                      background:'rgba(99,102,241,.08)', borderRadius:'var(--radius-md,6px)',
-                      border:'1px solid rgba(99,102,241,.2)' }}>
-          <strong style={{ color:'var(--accent)' }}>Threat Intel</strong> explanations appear
-          when analysts click <strong style={{ color:'var(--tx1)' }}>Explain</strong> on any alert.
-          SID-specific entries take priority over category entries.
-        </div>
-
-        {loading && <div style={{ color:'var(--tx3)', fontFamily:'var(--mono)', fontSize:12 }}>Loading…</div>}
-
-        {/* Inline add/edit form */}
-        {showForm && tab==='entries' && (
-          <TIManualForm existing={editing} onSaved={()=>{ setShowForm(false); setEditing(null); load(); }}
-                        onCancel={()=>{ setShowForm(false); setEditing(null); }}/>
-        )}
-
-        {/* ── Explanations tab ── */}
-        {tab==='entries' && !loading && entries.length===0 && !showForm && (
-          <div style={{ textAlign:'center', padding:'40px 0', color:'var(--tx3)' }}>
-            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1"
-                 style={{ marginBottom:10, opacity:.3 }}>
-              <circle cx="12" cy="12" r="10"/>
-              <line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
-            </svg>
-            <div style={{ fontSize:13 }}>No explanations yet</div>
-            <div style={{ fontSize:11, marginTop:4 }}>Add entries here or click Explain on any alert</div>
+      {/* Import result banner */}
+      {importResult && (
+        <div style={{ margin:'12px 24px 0', padding:'10px 14px',
+                      background: importResult.errors?.length ? 'rgba(240,84,84,.08)' : 'rgba(16,185,129,.08)',
+                      border: `1px solid ${importResult.errors?.length ? 'rgba(240,84,84,.3)' : 'rgba(16,185,129,.3)'}`,
+                      borderRadius:'var(--radius-md,6px)', fontSize:12 }}>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:4 }}>
+            <span style={{ fontWeight:600, color: importResult.errors?.length ? 'var(--danger,#f05454)' : 'var(--success,#10b981)' }}>
+              {importResult.imported > 0
+                ? `✓ Imported ${importResult.imported} entr${importResult.imported===1?'y':'ies'}`
+                : importResult.errors?.length ? '✗ Import failed' : 'Nothing to import'}
+              {importResult.skipped > 0 && ` · ${importResult.skipped} duplicate${importResult.skipped===1?'':'s'} skipped`}
+            </span>
+            <button onClick={()=>setImportResult(null)} style={{ background:'none',border:'none',
+              color:'var(--tx3)',cursor:'pointer',fontSize:16,lineHeight:1,padding:2 }}>×</button>
           </div>
-        )}
-
-        {tab==='entries' && !loading && entries.map(e => (
-          <div key={e.id} style={{ ...cardStyle,
-            borderLeft:`3px solid ${e.sig_id?'var(--accent)':'var(--sev-info,#4f9cf9)'}` }}>
-            <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:8 }}>
-              <span style={{ fontSize:9, fontFamily:'var(--mono)', letterSpacing:'.07em',
-                textTransform:'uppercase', padding:'2px 7px', borderRadius:20,
-                background: e.sig_id?'rgba(79,156,249,.12)':'rgba(159,122,234,.15)',
-                color: e.sig_id?'var(--accent)':'var(--sev-info,#9f7aea)',
-                border:`1px solid ${e.sig_id?'rgba(79,156,249,.3)':'rgba(159,122,234,.3)'}` }}>
-                {e.sig_id ? `SID ${e.sig_id}` : 'Category'}
-              </span>
-              <span style={{ fontWeight:500, fontSize:13, color:'var(--tx1)' }}>
-                {e.sig_msg||e.category||'—'}
-              </span>
-              <span style={{ marginLeft:'auto', fontSize:10, fontFamily:'var(--mono)', color:'var(--tx3)' }}>
-                {fmtDate(e.updated_at)} · {e.created_by||'system'}
-              </span>
-            </div>
-            <div style={{ fontSize:12, color:'var(--tx2)', lineHeight:1.65, marginBottom:10,
-              overflow:'hidden', display:'-webkit-box', WebkitLineClamp:3, WebkitBoxOrient:'vertical' }}>
-              {e.explanation}
-            </div>
-            {e.tags?.length>0 && (
-              <div style={{ display:'flex', gap:5, flexWrap:'wrap', marginBottom:10 }}>
-                {e.tags.map(t=>(
-                  <span key={t} style={{ padding:'1px 7px', borderRadius:20, fontSize:10,
-                    background:'var(--s3)', border:'1px solid var(--ln)',
-                    color:'var(--tx3)', fontFamily:'var(--mono)' }}>{t}</span>
+          {(importResult.warnings?.length > 0 || importResult.errors?.length > 0) && (
+            <details style={{ marginTop:4 }}>
+              <summary style={{ cursor:'pointer', color:'var(--tx3)', fontSize:11 }}>
+                {(importResult.warnings?.length||0)+(importResult.errors?.length||0)} warning{(importResult.warnings?.length||0)+(importResult.errors?.length||0)===1?'':'s'}
+              </summary>
+              <ul style={{ margin:'6px 0 0 16px', padding:0, color:'var(--tx2)', fontSize:11, lineHeight:1.7 }}>
+                {[...(importResult.errors||[]),...(importResult.warnings||[])].map((w,i)=>(
+                  <li key={i}>{w}</li>
                 ))}
-              </div>
-            )}
-            {canWrite && (
-              <div style={{ display:'flex', gap:7 }}>
-                <button style={{ padding:'3px 10px', border:'1px solid var(--ln)',
-                  borderRadius:'var(--radius-sm,4px)', background:'transparent',
-                  color:'var(--tx2)', fontSize:11, cursor:'pointer' }}
-                  onClick={()=>{ setEditing(e); setShowForm(true); setTab('entries'); }}>Edit</button>
-                {role==='admin' && (
-                  <button style={{ padding:'3px 10px', border:'1px solid var(--danger,#f05454)',
-                    borderRadius:'var(--radius-sm,4px)', background:'transparent',
-                    color:'var(--danger,#f05454)', fontSize:11, cursor:'pointer' }}
-                    onClick={()=>setDelId(e.id)}>Delete</button>
-                )}
-              </div>
-            )}
-          </div>
-        ))}
+              </ul>
+            </details>
+          )}
+        </div>
+      )}
 
-        {/* ── Coverage Gaps tab ── */}
-        {tab==='gaps' && !loading && (
-          <>
-            <div style={{ marginBottom:14, padding:'10px 14px', fontSize:12,
-              color:'var(--tx2)', lineHeight:1.7,
-              background:'rgba(245,200,66,.08)', borderRadius:'var(--radius-md,6px)',
-              border:'1px solid rgba(245,200,66,.2)' }}>
-              <strong style={{ color:'var(--sev-medium,#f5c842)' }}>Coverage Gaps</strong> — your most-fired
-              signatures with no explanation. Click <strong style={{ color:'var(--tx1)' }}>Add</strong> to document them.
-            </div>
-            {gaps.length===0 && (
-              <div style={{ textAlign:'center', padding:'40px 0', color:'var(--tx3)' }}>
-                <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1"
-                     style={{ marginBottom:10, opacity:.3 }}>
-                  <polyline points="20 6 9 17 4 12"/>
-                </svg>
-                <div style={{ fontSize:13 }}>Full coverage!</div>
-                <div style={{ fontSize:11, marginTop:4 }}>All top-firing SIDs have explanations</div>
+      {loading && (
+        <div style={{ padding:40, textAlign:'center', color:'var(--tx3)',
+                      fontFamily:'var(--mono)', fontSize:12 }}>Loading…</div>
+      )}
+
+      {!loading && tab==='entries' && (
+        <div style={sectionStyle}>
+          <div style={innerStyle}>
+            {showForm && (
+              <TIEntryForm
+                key={editing?.id||'new'}
+                initial={editing}
+                role={role}
+                onSaved={()=>{ setShowForm(false); setEditing(null); load(); }}
+                onCancel={()=>{ setShowForm(false); setEditing(null); }}
+              />
+            )}
+
+            {entries.length === 0 && !showForm && (
+              <div style={{ ...cardStyle, textAlign:'center', padding:'32px 20px', color:'var(--tx3)' }}>
+                <div style={{ fontSize:13, marginBottom:8 }}>No threat intel entries yet</div>
+                <div style={{ fontSize:11 }}>Add entries manually or import a .htf file</div>
               </div>
             )}
-            {gaps.map(g => (
-              <div key={g.sig_id} style={{ ...cardStyle, display:'flex', alignItems:'center', gap:12 }}>
-                <div style={{ flex:1, minWidth:0 }}>
-                  <div style={{ fontFamily:'var(--mono)', fontSize:11, color:'var(--tx3)', marginBottom:3 }}>
-                    SID {g.sig_id}
+
+            {entries.map(e => (
+              <div key={e.id} style={{ ...cardStyle, position:'relative' }}>
+                {delId===e.id ? (
+                  <div style={{ display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' }}>
+                    <span style={{ fontSize:12, color:'var(--danger,#f05454)' }}>Delete this entry?</span>
+                    <button onClick={()=>doDelete(e.id)} style={{ padding:'3px 10px', background:'none',
+                      border:'1px solid var(--danger,#f05454)', borderRadius:'var(--radius-sm,4px)',
+                      color:'var(--danger,#f05454)', cursor:'pointer', fontSize:11 }}>Delete</button>
+                    <button onClick={()=>setDelId(null)} style={{ padding:'3px 10px', background:'none',
+                      border:'1px solid var(--ln)', borderRadius:'var(--radius-sm,4px)',
+                      color:'var(--tx3)', cursor:'pointer', fontSize:11 }}>Cancel</button>
                   </div>
-                  <div style={{ fontSize:12, color:'var(--tx1)', overflow:'hidden',
-                    textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{g.sig_msg}</div>
-                </div>
-                <div style={{ fontFamily:'var(--mono)', fontSize:11, color:'var(--sev-high,#f5944a)', whiteSpace:'nowrap' }}>
-                  {g.count?.toLocaleString()} fires
-                </div>
-                {canWrite && (
-                  <button onClick={()=>{ setEditing({_prefill:true,sig_id:g.sig_id,sig_msg:g.sig_msg});
-                                         setShowForm(true); setTab('entries'); }}
-                    style={{ padding:'4px 12px', border:'1px solid var(--accent)',
-                      borderRadius:'var(--radius-sm,4px)', background:'transparent',
-                      color:'var(--accent)', fontSize:11, cursor:'pointer', whiteSpace:'nowrap' }}>
-                    + Add
-                  </button>
+                ) : (
+                  <>
+                    <div style={{ display:'flex', alignItems:'flex-start', gap:10, flexWrap:'wrap' }}>
+                      <div style={{ flex:1, minWidth:0 }}>
+                        <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap', marginBottom:6 }}>
+                          {e.sig_id && (
+                            <span style={{ fontFamily:'var(--mono)', fontSize:11, fontWeight:600,
+                              color:'var(--accent)', background:'rgba(99,102,241,.1)',
+                              padding:'1px 7px', borderRadius:20, border:'1px solid rgba(99,102,241,.2)' }}>
+                              SID {e.sig_id}
+                            </span>
+                          )}
+                          {e.category && (
+                            <span style={{ fontFamily:'var(--mono)', fontSize:11,
+                              color:'var(--tx2)', background:'var(--s2)',
+                              padding:'1px 7px', borderRadius:20, border:'1px solid var(--ln)' }}>
+                              {e.category}
+                            </span>
+                          )}
+                          {e.sig_msg && (
+                            <span style={{ fontSize:12, fontWeight:500, color:'var(--tx1)' }}>
+                              {e.sig_msg}
+                            </span>
+                          )}
+                          <span style={{ fontSize:10, color:'var(--tx3)', marginLeft:'auto', whiteSpace:'nowrap' }}>
+                            {fmtDate(e.updated_at)}
+                          </span>
+                        </div>
+                        <div style={{ fontSize:12, color:'var(--tx2)', lineHeight:1.7, whiteSpace:'pre-wrap',
+                                      marginBottom: (e.tags?.length||e.refs?.length) ? 8 : 0 }}>
+                          {e.explanation}
+                        </div>
+                        <div style={{ display:'flex', gap:6, flexWrap:'wrap', alignItems:'center' }}>
+                          {(e.tags||[]).map(t=>(
+                            <span key={t} style={{ fontSize:10, padding:'1px 7px',
+                              background:'var(--s2)', border:'1px solid var(--ln)',
+                              borderRadius:20, color:'var(--tx3)', fontFamily:'var(--mono)' }}>
+                              {t}
+                            </span>
+                          ))}
+                          {(e.refs||[]).map(r=>(
+                            <a key={r} href={r} target="_blank" rel="noopener noreferrer"
+                               style={{ fontSize:10, color:'var(--accent)', fontFamily:'var(--mono)',
+                                        textDecoration:'none', wordBreak:'break-all' }}>
+                              {r}
+                            </a>
+                          ))}
+                        </div>
+                      </div>
+                      {canWrite && (
+                        <div style={{ display:'flex', gap:5, flexShrink:0 }}>
+                          <button onClick={()=>{setEditing(e);setShowForm(true);}}
+                            style={{ padding:'3px 9px', background:'none',
+                              border:'1px solid var(--ln)', borderRadius:'var(--radius-sm,4px)',
+                              color:'var(--tx2)', cursor:'pointer', fontSize:11 }}>Edit</button>
+                          <button onClick={()=>setDelId(e.id)}
+                            style={{ padding:'3px 9px', background:'none',
+                              border:'1px solid var(--ln)', borderRadius:'var(--radius-sm,4px)',
+                              color:'var(--tx3)', cursor:'pointer', fontSize:11 }}>✕</button>
+                        </div>
+                      )}
+                    </div>
+                  </>
                 )}
               </div>
             ))}
-          </>
-        )}
-      </div>
+          </div>
+        </div>
+      )}
 
-      {/* Delete confirm */}
-      {delId!==null && (
-        <ConfirmDialog
-          title="Delete explanation?"
-          body="This will permanently remove the explanation."
-          confirmLabel="Delete"
-          variant="danger"
-          onConfirm={() => doDelete(delId)}
-          onClose={() => setDelId(null)}
-        />
+      {!loading && tab==='gaps' && (
+        <div style={sectionStyle}>
+          <div style={innerStyle}>
+            <div style={{ fontSize:11, color:'var(--tx3)', marginBottom:14, lineHeight:1.6 }}>
+              Top signatures firing without any intel entry. Click a row to create one.
+            </div>
+            {gaps.length===0 ? (
+              <div style={{ ...cardStyle, textAlign:'center', padding:'24px', color:'var(--tx3)', fontSize:12 }}>
+                All firing signatures have intel entries — great coverage!
+              </div>
+            ) : gaps.map(g=>(
+              <div key={g.sig_id} style={{ ...cardStyle, cursor: canWrite?'pointer':'default',
+                    display:'flex', alignItems:'center', gap:12, flexWrap:'wrap' }}
+                   onClick={()=>{ if(!canWrite) return;
+                     setEditing({ sig_id:g.sig_id, sig_msg:g.sig_msg,
+                                  category:'', explanation:'', tags:[], refs:[] });
+                     setShowForm(true); setTab('entries'); }}>
+                <span style={{ fontFamily:'var(--mono)', fontSize:11, color:'var(--accent)',
+                  background:'rgba(99,102,241,.1)', padding:'1px 7px', borderRadius:20,
+                  border:'1px solid rgba(99,102,241,.2)', flexShrink:0 }}>
+                  SID {g.sig_id}
+                </span>
+                <span style={{ fontSize:12, color:'var(--tx1)', flex:1, minWidth:0 }}>{g.sig_msg}</span>
+                <span style={{ fontFamily:'var(--mono)', fontSize:11, color:'var(--tx3)', flexShrink:0 }}>
+                  {g.count} alert{g.count===1?'':'s'}
+                </span>
+                {canWrite && (
+                  <span style={{ fontSize:10, color:'var(--accent)', flexShrink:0 }}>+ Add intel →</span>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
       )}
     </div>
   );
 }
 
-function TIManualForm({ existing, onSaved, onCancel }) {
-  const prefill = existing?._prefill;
-  const [sigId,       setSigId]       = useState(existing?.sig_id&&!prefill?String(existing.sig_id):prefill?String(existing.sig_id):'');
-  const [sigMsg,      setSigMsg]      = useState(existing?.sig_msg||'');
-  const [category,    setCategory]    = useState(existing?.category||'');
-  const [explanation, setExplanation] = useState(existing?.explanation||'');
-  const [tagInput,    setTagInput]    = useState('');
-  const [tags,        setTags]        = useState(existing?.tags||[]);
-  const [refInput,    setRefInput]    = useState('');
-  const [refs,        setRefs]        = useState(existing?.refs||[]);
-  const [saving,      setSaving]      = useState(false);
-  const [err,         setErr]         = useState('');
-  const isEdit = existing?.id && !prefill;
-
-  function addTag(){const t=tagInput.trim();if(t&&!tags.includes(t))setTags(p=>[...p,t]);setTagInput('');}
-  function addRef(){const r=refInput.trim();if(r&&!refs.includes(r))setRefs(p=>[...p,r]);setRefInput('');}
-
-  async function save() {
-    if (!explanation.trim()) { setErr('Explanation is required'); return; }
-    if (!sigId&&!category.trim()) { setErr('SID or Category is required'); return; }
-    setSaving(true); setErr('');
-    const body = { sig_id:sigId?parseInt(sigId):null, sig_msg:sigMsg.trim()||null,
-                   category:category.trim()||null, explanation:explanation.trim(), tags, refs };
-    const method   = isEdit?'PUT':'POST';
-    const endpoint = isEdit?`/threat-intel/${existing.id}`:'/threat-intel';
-    try {
-      const r = await fetch(endpoint,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-      const d = await r.json();
-      if (!r.ok){setErr(d.error||'Save failed');return;}
-      onSaved(d);
-    } catch { setErr('Network error'); }
-    finally { setSaving(false); }
-  }
-
-  const inp = { width:'100%', padding:'7px 10px', background:'var(--s2)',
-    border:'1px solid var(--ln)', borderRadius:'var(--radius-sm,4px)',
-    color:'var(--tx1)', fontSize:12, fontFamily:'var(--sans,inherit)',
-    outline:'none', boxSizing:'border-box' };
-  const lbl = { fontSize:9, fontWeight:600, letterSpacing:'.09em', textTransform:'uppercase',
-    color:'var(--tx3)', display:'block', marginBottom:5 };
-
-  return (
-    <div style={{ background:'var(--s2)', border:'1px solid var(--ln)',
-      borderRadius:'var(--radius-lg,10px)', padding:18, marginBottom:18 }}>
-      <div style={{ fontSize:13, fontWeight:500, color:'var(--tx1)', marginBottom:14 }}>
-        {isEdit?'Edit Explanation':'New Explanation'}
-      </div>
-      <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12, marginBottom:12 }}>
-        <div><label style={lbl}>SID (optional)</label>
-          <input style={{ ...inp, fontFamily:'var(--mono)' }} type="number" placeholder="e.g. 2100498"
-                 value={sigId} onChange={e=>setSigId(e.target.value)}/></div>
-        <div><label style={lbl}>Category (optional)</label>
-          <input style={inp} placeholder="e.g. trojan-activity"
-                 value={category} onChange={e=>setCategory(e.target.value)}/></div>
-      </div>
-      <div style={{ marginBottom:12 }}>
-        <label style={lbl}>Signature name (optional)</label>
-        <input style={inp} placeholder="Human-readable name"
-               value={sigMsg} onChange={e=>setSigMsg(e.target.value)}/>
-      </div>
-      <div style={{ marginBottom:12 }}>
-        <label style={lbl}>Explanation</label>
-        <textarea style={{ ...inp, minHeight:90, resize:'vertical', lineHeight:1.65 }}
-          placeholder="What does this alert mean?"
-          value={explanation} onChange={e=>setExplanation(e.target.value)}/>
-      </div>
-      <div style={{ marginBottom:12 }}>
-        <label style={lbl}>Tags</label>
-        <div style={{ display:'flex', flexWrap:'wrap', gap:5, marginBottom:5 }}>
-          {tags.map(t=>(
-            <span key={t} style={{ display:'inline-flex',alignItems:'center',gap:4,
-              padding:'2px 8px',borderRadius:20,fontSize:11,
-              background:'var(--s3)',border:'1px solid var(--ln)',color:'var(--tx2)',fontFamily:'var(--mono)' }}>
-              {t}<span onClick={()=>setTags(p=>p.filter(x=>x!==t))} style={{ cursor:'pointer',color:'var(--tx3)' }}>×</span>
-            </span>
-          ))}
-        </div>
-        <div style={{ display:'flex',gap:6 }}>
-          <input style={{ ...inp,flex:1 }} placeholder="Add tag…" value={tagInput}
-                 onChange={e=>setTagInput(e.target.value)}
-                 onKeyDown={e=>{ if(e.key==='Enter'){e.preventDefault();addTag();} }}/>
-          <button onClick={addTag} style={{ padding:'6px 10px',border:'1px solid var(--ln)',
-            borderRadius:'var(--radius-sm,4px)',background:'transparent',color:'var(--tx2)',fontSize:11,cursor:'pointer' }}>Add</button>
-        </div>
-      </div>
-      <div style={{ marginBottom:14 }}>
-        <label style={lbl}>References</label>
-        <div style={{ display:'flex',flexDirection:'column',gap:3,marginBottom:5 }}>
-          {refs.map(r=>(
-            <div key={r} style={{ display:'flex',alignItems:'center',gap:8 }}>
-              <span style={{ flex:1,fontFamily:'var(--mono)',fontSize:11,color:'var(--accent)',
-                overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap' }}>{r}</span>
-              <span onClick={()=>setRefs(p=>p.filter(x=>x!==r))} style={{ cursor:'pointer',color:'var(--tx3)',fontSize:13 }}>×</span>
-            </div>
-          ))}
-        </div>
-        <div style={{ display:'flex',gap:6 }}>
-          <input style={{ ...inp,flex:1,fontFamily:'var(--mono)',fontSize:11 }} placeholder="https://…"
-                 value={refInput} onChange={e=>setRefInput(e.target.value)}
-                 onKeyDown={e=>{ if(e.key==='Enter'){e.preventDefault();addRef();} }}/>
-          <button onClick={addRef} style={{ padding:'6px 10px',border:'1px solid var(--ln)',
-            borderRadius:'var(--radius-sm,4px)',background:'transparent',color:'var(--tx2)',fontSize:11,cursor:'pointer' }}>Add</button>
-        </div>
-      </div>
-      {err && <div style={{ marginBottom:10,padding:'6px 10px',fontSize:12,
-        background:'rgba(240,84,84,.1)',border:'1px solid var(--danger,#f05454)',
-        borderRadius:'var(--radius-sm,4px)',color:'var(--danger,#f05454)' }}>{err}</div>}
-      <div style={{ display:'flex',gap:8,justifyContent:'flex-end' }}>
-        <button onClick={onCancel} disabled={saving} style={{ padding:'5px 14px',
-          border:'1px solid var(--ln)',borderRadius:'var(--radius-sm,4px)',
-          background:'transparent',color:'var(--tx2)',fontSize:12,cursor:'pointer' }}>Cancel</button>
-        <button onClick={save} disabled={saving} style={{ padding:'5px 18px',
-          border:'1px solid var(--accent)',borderRadius:'var(--radius-sm,4px)',
-          background:'transparent',color:'var(--accent)',fontSize:12,
-          cursor:saving?'wait':'pointer' }}>{saving?'Saving…':isEdit?'Save':'Create'}</button>
-      </div>
-    </div>
-  );
-}
-
-
-// ── AIExplainView ─────────────────────────────────────────────────────────────
 function AIExplainView({ role }) {
   const [settings,     setSettings]     = useState({ provider:'openai', enabled:false, api_key_set:false });
   const [apiKeyInput,  setApiKeyInput]  = useState('');
@@ -2043,8 +2194,160 @@ function AIExplainView({ role }) {
 }
 
 
+// ── ReplayFlushPanel — shared across all skins ───────────────────────────────
+function ReplayFlushPanel({ onFlushed }) {
+  const [replay,    setReplay]    = useState({ running:false, done:false, inserted:0, skipped:0, total:0, error:null });
+  const [flushing,  setFlushing]  = useState(false);
+  const [flushDone, setFlushDone] = useState(null);
+  const [showFlushConfirm, setShowFlushConfirm] = useState(false);
+  const pollRef = React.useRef(null);
+
+  // Poll replay status while running
+  React.useEffect(() => {
+    if (replay.running) {
+      pollRef.current = setInterval(async () => {
+        try {
+          const d = await fetch('/replay/status').then(r => r.json());
+          setReplay(d);
+          if (!d.running) clearInterval(pollRef.current);
+        } catch {}
+      }, 1000);
+    }
+    return () => clearInterval(pollRef.current);
+  }, [replay.running]);
+
+  async function startReplay() {
+    const r = await fetch('/replay', { method: 'POST' });
+    const d = await r.json();
+    if (d.ok) setReplay(s => ({ ...s, running: true, done: false, error: null, inserted: 0, skipped: 0, total: 0 }));
+    else alert(d.error || 'Could not start replay');
+  }
+
+  async function doFlush() {
+    setShowFlushConfirm(false);
+    setFlushing(true); setFlushDone(null);
+    try {
+      const r = await fetch('/flush', { method: 'POST' });
+      const d = await r.json();
+      if (d.ok) {
+        const tot = Object.values(d.deleted).reduce((a, b) => a + b, 0);
+        setFlushDone(`Flushed ${tot.toLocaleString()} records`);
+        if (onFlushed) onFlushed();
+      }
+    } catch { setFlushDone('Error — check connection'); }
+    setFlushing(false);
+  }
+
+  const cardStyle = {
+    background:'var(--s1)', border:'1px solid var(--ln)',
+    borderRadius:'var(--radius-lg,10px)', marginBottom:12, overflow:'hidden',
+  };
+  const hdrStyle = {
+    padding:'10px 16px', background:'var(--s2)', borderBottom:'1px solid var(--ln)',
+    fontSize:11, fontWeight:600, color:'var(--tx1)', letterSpacing:'.06em',
+    textTransform:'uppercase', display:'flex', alignItems:'center', gap:8,
+  };
+  const bodyStyle = { padding:'14px 16px' };
+  const desc = { fontSize:12, color:'var(--tx2)', lineHeight:1.65, marginBottom:12 };
+  const btnStyle = (color, disabled) => ({
+    padding:'6px 16px', border:`1px solid ${color}`, borderRadius:'var(--radius-sm,4px)',
+    background:'transparent', color, fontSize:12, cursor: disabled ? 'not-allowed' : 'pointer',
+    opacity: disabled ? .5 : 1,
+  });
+
+  return (
+    <>
+      {/* Replay card */}
+      <div style={cardStyle}>
+        <div style={hdrStyle}>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.87"/>
+          </svg>
+          Replay eve.json
+        </div>
+        <div style={bodyStyle}>
+          <div style={desc}>
+            Re-read <code style={{fontFamily:'var(--mono)',fontSize:11}}>eve.json</code> from the
+            beginning and insert any events missed while Heimdall was down. Runs in the background —
+            the dashboard stays usable while it works.
+          </div>
+          {replay.running && (
+            <div style={{marginBottom:10, padding:'8px 12px', background:'rgba(99,102,241,.08)',
+                border:'1px solid rgba(99,102,241,.25)', borderRadius:'var(--radius-sm,4px)',
+                fontSize:12, fontFamily:'var(--mono)', color:'var(--accent)'}}>
+              <span style={{marginRight:8}}>⟳</span>
+              Running… {replay.total.toLocaleString()} lines read &nbsp;·&nbsp;
+              {replay.inserted.toLocaleString()} inserted &nbsp;·&nbsp;
+              {replay.skipped.toLocaleString()} skipped
+            </div>
+          )}
+          {replay.done && !replay.running && (
+            <div style={{marginBottom:10, padding:'8px 12px',
+                background: replay.error ? 'rgba(240,84,84,.08)' : 'rgba(16,185,129,.08)',
+                border:`1px solid ${replay.error ? 'rgba(240,84,84,.3)' : 'rgba(16,185,129,.3)'}`,
+                borderRadius:'var(--radius-sm,4px)', fontSize:12, fontFamily:'var(--mono)',
+                color: replay.error ? 'var(--danger,#f05454)' : 'var(--success,#10b981)'}}>
+              {replay.error
+                ? `Error: ${replay.error}`
+                : `Done — ${replay.total.toLocaleString()} lines · ${replay.inserted.toLocaleString()} inserted · ${replay.skipped.toLocaleString()} skipped`}
+            </div>
+          )}
+          <button style={btnStyle('var(--accent)', replay.running)}
+                  disabled={replay.running} onClick={startReplay}>
+            {replay.running ? 'Replaying…' : 'Start Replay'}
+          </button>
+        </div>
+      </div>
+
+      {/* Flush card */}
+      <div style={cardStyle}>
+        <div style={hdrStyle}>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6m4-6v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+          </svg>
+          Flush All Records
+        </div>
+        <div style={bodyStyle}>
+          <div style={desc}>
+            Delete every alert, flow, DNS query, and HTTP event from the Heimdall database.
+            The <code style={{fontFamily:'var(--mono)',fontSize:11}}>eve.json</code> file and Suricata
+            are untouched — new events will continue coming in as usual. There is no undo; use
+            <strong style={{color:'var(--tx1)'}}> Replay</strong> to re-read records from eve.json.
+          </div>
+          {flushDone && (
+            <div style={{marginBottom:10, padding:'8px 12px', background:'rgba(16,185,129,.08)',
+                border:'1px solid rgba(16,185,129,.3)', borderRadius:'var(--radius-sm,4px)',
+                fontSize:12, fontFamily:'var(--mono)', color:'var(--success,#10b981)'}}>
+              {flushDone}
+            </div>
+          )}
+          {!showFlushConfirm ? (
+            <button style={btnStyle('var(--danger,#f05454)', flushing)}
+                    disabled={flushing} onClick={() => setShowFlushConfirm(true)}>
+              {flushing ? 'Flushing…' : 'Flush All Records'}
+            </button>
+          ) : (
+            <div style={{padding:'10px 14px', background:'rgba(240,84,84,.08)',
+                border:'1px solid rgba(240,84,84,.3)', borderRadius:'var(--radius-sm,4px)'}}>
+              <div style={{fontSize:12, color:'var(--danger,#f05454)', marginBottom:10, fontWeight:500}}>
+                ⚠ This will permanently delete all records. Are you sure?
+              </div>
+              <div style={{display:'flex', gap:8}}>
+                <button style={btnStyle('var(--danger,#f05454)', false)} onClick={doFlush}>Yes, flush everything</button>
+                <button style={{...btnStyle('var(--tx3)', false)}} onClick={() => setShowFlushConfirm(false)}>Cancel</button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
 function App() {
   const [alerts,     setAlerts]     = useState([]);
+  const [alertTotal, setAlertTotal] = useState(0);
+  const alertOffsetRef = React.useRef(0);
   const [view,       setView]       = useState('alerts');
   const [selectedId, setSelectedId] = useState(null);
   const [svFilter,   setSvFilter]   = useState('all');
@@ -2065,9 +2368,11 @@ function App() {
 
   useEffect(() => {
     fetch('/me').then(r=>r.json()).then(d=>{setRole(d.role||'viewer');setUsername(d.username||'');}).catch(()=>{});
-    fetch('/alerts?limit=500').then(r=>r.json()).then(d=>{
+    fetch('/alerts?limit=300').then(r=>r.json()).then(d=>{
       const rows=d.alerts||[];
       setAlerts(rows);
+      setAlertTotal(d.total||rows.length);
+      alertOffsetRef.current=rows.length;
       if(rows.length) setSelectedId(rows[0].id);
     }).catch(()=>{});
     fetch('/health').then(r=>r.json()).then(d=>setDbStats({alerts:d.db?.alerts?.total||0,flows:d.db?.flows?.total||0,dns:d.db?.dns?.total||0})).catch(()=>{});
@@ -2139,6 +2444,21 @@ function App() {
       });
   }
 
+  // ── Load More alerts ─────────────────────────────────────────────────────
+  async function loadMoreAlerts() {
+    const offset = alertOffsetRef.current;
+    try {
+      const d = await fetch(`/alerts?limit=300&offset=${offset}`).then(r => r.json());
+      const rows = d.alerts || [];
+      setAlerts(prev => {
+        const ids = new Set(prev.map(a => a.id));
+        return [...prev, ...rows.filter(a => !ids.has(a.id))];
+      });
+      setAlertTotal(d.total || 0);
+      alertOffsetRef.current = offset + rows.length;
+    } catch {}
+  }
+
   function applyTheme(t) { setTheme(t); document.documentElement.setAttribute('data-theme',t); localStorage.setItem('heimdall-theme',t); }
   async function handleLogout() { try { await fetch('/logout',{method:'POST'}); } catch {} window.location.href='/login'; }
 
@@ -2166,7 +2486,7 @@ function App() {
         </div>
         <nav className="center-nav">
           {NAV_VIEWS.map(v => (
-            <button key={v} className={`nav-pill${view===v?' active':''}`} onClick={()=>setView(v)}>
+            <button key={v} className={`nav-pill${view===v?' active':''}`} onClick={()=>{ setView(v); if(v!==view){ alertOffsetRef.current=0; } }}>
               {NAV_LABELS[v]}
             </button>
           ))}
@@ -2207,12 +2527,25 @@ function App() {
           <div className="main-view">
             {view === 'chronicle' && <ChronicleView alerts={alerts} role={role} setAlerts={setAlerts}
               aiExplanations={aiExplanations} onRequestAiExplain={requestAiExplain} aiEnabled={aiSettings.enabled}/>}
+
+          {view==='alerts' && alertTotal>alerts.length && (
+            <div style={{textAlign:'center',padding:'12px 0'}}>
+              <button onClick={loadMoreAlerts} style={{padding:'6px 18px',
+                border:'1px solid var(--ln)',borderRadius:'var(--radius-sm,4px)',
+                background:'transparent',color:'var(--tx2)',fontSize:12,cursor:'pointer'}}>
+                Load more  <span style={{color:'var(--tx3)',fontSize:11}}>
+                  ({alerts.length.toLocaleString()} / {alertTotal.toLocaleString()} loaded)
+                </span>
+              </button>
+            </div>
+          )}
             {view === 'flows'     && <><div className="main-head"><span className="main-title">Flow events</span></div><FlowsView/></>}
             {view === 'dns'       && <><div className="main-head"><span className="main-title">DNS queries</span></div><DNSView/></>}
             {view === 'charts'    && <ChartsView/>}
             {view === 'threat-intel' && <ThreatIntelView role={role}/>}
             {view === 'ai-explain'   && <AIExplainView role={role}/>}
-            {view === 'settings'  && <SettingsView theme={theme} setTheme={applyTheme} role={role} username={username} onLogout={handleLogout}/>}
+            {view === 'settings'  && <SettingsView theme={theme} setTheme={applyTheme} role={role} username={username} onLogout={handleLogout}
+              onDataFlushed={() => { setAlerts([]); setAlertTotal(0); alertOffsetRef.current=0; }}/>}
           </div>
         )}
       </div>

@@ -4,6 +4,11 @@
 :root {
   --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+  /* Aliases used by JSX components */
+  --sans:       var(--font-sans);
+  --mono:       var(--font-mono);
+  --teal:       #0D9488;
+  --accent-rgb: 79, 156, 249;
 }
 /* Heimdall IDS — Original Skin */
 
