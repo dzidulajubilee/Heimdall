@@ -1,9 +1,6 @@
-
-# Heimdall
+# Heimdall IDS Dashboard
 
 **A self-hosted, fully airgapped network intrusion detection dashboard for Suricata.**  
-Built by G-Sentry · Licensed under [GNU AGPL v3.0](LICENSE)
-
 ---
 
 ## What is Heimdall?
@@ -23,52 +20,21 @@ Heimdall IDS is a lightweight, single-binary web dashboard that sits on top of [
 
 ## Table of Contents
 
-1. [Architecture](#architecture)
-2. [Requirements](#requirements)
-3. [Installation](#installation)
-4. [First Login](#first-login)
-5. [Configuration](#configuration)
-6. [Features](#features)
-7. [Skins](#skins)
-8. [AI Explanation](#ai-explanation)
-9. [Webhooks](#webhooks)
-10. [Security](#security)
-11. [Building from Source](#building-from-source)
-12. [Changelog](#changelog)
+1. [Requirements](#requirements)
+2. [Installation](#installation)
+3. [First Login](#first-login)
+4. [Configuration](#configuration)
+5. [Features](#features)
+6. [Skins](#skins)
+7. [AI Explanation](#ai-explanation)
+8. [Webhooks](#webhooks)
+9. [Security](#security)
+10. [Building from Source](#building-from-source)
+11. [Changelog](#changelog)
+12. [Architecture](#architecture)
 13. [License](#license)
 
 ---
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────┐
-│                     Browser                         │
-│  React (no build step) · 4 skins · SSE consumer     │
-└────────────────────┬────────────────────────────────┘
-                     │ HTTP / SSE
-┌────────────────────▼────────────────────────────────┐
-│              Heimdall HTTP Server                   │
-│  ThreadedHTTPServer · BaseHTTPRequestHandler        │
-│                                                     │
-│  ┌──────────┐  ┌──────────┐  ┌──────────────────┐   │
-│  │ tail     │  │ purge    │  │ delivery_worker   │  │
-│  │ thread   │  │ thread   │  │ (webhooks)        │  │
-│  └────┬─────┘  └────┬─────┘  └──────────────────┘   │
-│       │              │                              │
-│  ┌────▼──────────────▼───────────────────────────┐  │
-│  │              SQLite (3 databases)             │  │
-│  │  events.db · dns.db · config.db               │  │
-│  └───────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────┘
-         ▲
-         │ reads
-┌────────┴────────┐
-│  eve.json       │
-│  (Suricata)     │
-└─────────────────┘
-```
-
 
 ## Requirements
 
@@ -117,7 +83,6 @@ That's it. The installer will:
 ```
 
 ---
-
 
 ## First Login
 
@@ -297,71 +262,19 @@ A yellow **local** badge appears on the webhook card when this is enabled, so it
 | SQL injection | Parameterised queries throughout; no string interpolation into SQL |
 | Session security | bcrypt passwords; indexed sessions with expiry |
 
-
-
-### systemd sandboxing
-The service unit applies the following restrictions:
-
-```ini
-NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=true
-PrivateTmp=true
-PrivateDevices=true
-ProtectKernelTunables=true
-ProtectControlGroups=true
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-RestrictNamespaces=true
-ReadWritePaths=/var/lib/heimdall /var/log/heimdall
-ReadOnlyPaths=/var/log/suricata
-```
-
-### Network exposure
-By default Heimdall binds to `0.0.0.0:8765`. If you only need local access, change `--host` to `127.0.0.1` in the service file. For remote access, put Nginx or Caddy in front with TLS.
-
-
 ### Known gaps
 
 - **No TLS** — Heimdall listens on plain HTTP. For any network-exposed deployment, place behind nginx, Caddy, or use Tailscale.
 - **No CSRF tokens** — acceptable for a localhost-first tool; add if exposing on a shared network.
 - **No admin audit log** — user creation and role changes are not currently written to a dedicated audit trail.
 
-
-### Recommended Nginx reverse proxy (TLS)
-
-```nginx
-server {
-    listen 443 ssl;
-    server_name heimdall.yourdomain.com;
-
-    ssl_certificate     /etc/ssl/certs/heimdall.crt;
-    ssl_certificate_key /etc/ssl/private/heimdall.key;
-
-    location / {
-        proxy_pass         http://127.0.0.1:8765;
-        proxy_http_version 1.1;
-        proxy_set_header   Upgrade $http_upgrade;
-        proxy_set_header   Connection keep-alive;
-        proxy_set_header   Host $host;
-        proxy_buffering    off;  # Required for SSE
-    }
-}
-```
-
 ---
 
 ## Building from Source
 
-
-### Prerequisites
-
-```bash
-npm install -g esbuild   # for JSX compilation
-sudo apt install dpkg-dev
-```
+**Requirements:** `esbuild`, `dpkg-deb`
 
 ```bash
-<<<<<<< HEAD
 # Clone or extract the source
 cd heimdall-github/
 
@@ -373,12 +286,6 @@ bash build-deb.sh 0.6
 
 # Output
 # packaging/build/heimdall-ids_0.5_all.deb
-=======
-git clone https://github.com/dzidulajubilee/Heimdall.git
-cd Heimdall
-./build-deb.sh 0.4.1
-# → packaging/build/heimdall-ids_0.4.1_all.deb
->>>>>>> 33d86bafdf87a86c7b59e0edfce9ee79f1d379f5
 ```
 
 The build script:
@@ -393,108 +300,56 @@ The build script:
 
 ## Changelog
 
-### v0.5 — May 2026
+### v1.0 — May 2026
 
-- **Critical bug fix:** service crash-restart loop on startup
----
-### v0.4.1 — 2026-05-06
-- **Fix:** `NameError: name 'threading' is not defined` in `handlers.py` — `import threading` was missing, causing the service to crash on startup in a restart loop
-- **Bug:** `handlers.py` used `threading.Lock()` at module level to initialise `_LOGIN_LOCK` (introduced in the v0.2 security audit), but `import threading` was missing from the file's imports block. Python evaluates module-level statements the instant a file is imported, so `server.py` crashed on its very first `from handlers import Handler` with `NameError: name 'threading' is not defined` — before the HTTP server could start. systemd detected the crash and restarted in a loop.
-- **Fix:** Added `import threading` to the imports block in `handlers.py`.
-- **Verified:** `py_compile` check passes; live `import handlers` confirms `threading.Lock()` initialises correctly as `<unlocked _thread.lock object>`.
+**Seven bugs fixed — Threat Intel and Suppression fully operational:**
 
----
+- **Bug (critical):** `_read_json()` returns a `(data, err)` tuple. `_ti_create`, `_ti_update`, `_sup_create`, and `_sup_update` were all calling it as `body = self._read_json()` instead of `body, err = self._read_json()`. Every call to these endpoints crashed with `AttributeError: 'tuple' object has no attribute 'get'`, surfacing as a generic "Network error" in the frontend.
+- **Bug:** `_import_htf()` was called in `do_POST` for `POST /threat-intel/import` but was never implemented in `handlers.py`. Any .htf import attempt raised `AttributeError` → server 500 → frontend "TypeError: Failed to fetch".
+- **Bug:** `_export_htf()` was similarly called in `do_GET` for `GET /threat-intel/export` but was never implemented. Export was silently broken.
+- **Bug:** `POST /suppression` was not routed in `do_POST`. Creating suppression rules was impossible.
+- **Bug:** `PUT /threat-intel/{id}` was not routed in `do_PUT`. Editing threat intel entries was impossible.
+- **Bug:** `PUT /suppression/{id}` was not routed in `do_PUT`. Editing suppression rules was impossible.
+- **Bug:** `DELETE /threat-intel/{id}` and `DELETE /suppression/{id}` were not routed in `do_DELETE`. Deletion of both was impossible.
 
-### v0.4 — May 2026
-**Bundled web fonts — Inter + JetBrains Mono**
+**CSS alignment across all four skins:**
 
-- Fonts are now fully bundled inside the `.deb`. Zero external font requests at runtime.
-- **Inter** (sans-serif): weights 400, 500, 600, 700 — latin subset, woff2 format
-- **JetBrains Mono** (monospace): weights 400, 500, 600 — latin subset, woff2 format
-- Total font payload: **168 KB** across 7 files
-- `frontend/fonts/fonts.css` created with `@font-face` declarations and `font-display: swap`
-- All four skin stylesheets updated to `@import url('../../fonts/fonts.css')`
-- `login.html` updated with `<link rel="stylesheet" href="fonts/fonts.css">`
-- `handlers.py` updated: `woff2/woff/ttf` MIME types added; `font-src 'self'` added to CSP; font files served with long-term cache headers
-- `build-deb.sh` updated to copy `frontend/fonts/` into the package
-- Package size: ~160 KB (v0.3) → ~318 KB (v0.4), difference is entirely the font payload
+- All skins now define `--sans`, `--teal`, and `--accent-rgb` in `:root`, eliminating silent fallback reliance in shared JSX.
+- Chronicles and Mosaic now define `--radius-sm`, `--radius-md`, `--radius-lg` as aliases for their `--r-sm`/`--r-md`/`--r-lg` tokens, matching what Original and Seal already used.
 
 ---
 
-### v0.3 — May 2026
-**Webhook SSRF refined — n8n and LAN tools now supported**
-
-The v0.2 blanket private-IP block would have broken any webhook pointing to a locally-hosted tool. Replaced with a per-webhook explicit opt-in:
-
-- **`allow_local` field** added to the `webhooks` table in `config.db`
-- Automatic DB migration for existing installs (`ALTER TABLE webhooks ADD COLUMN allow_local INTEGER NOT NULL DEFAULT 0`)
-- `_ssrf_safe(url, allow_local=False)` — when `allow_local=True`, the private-IP check is bypassed entirely
-- `deliver()` and `delivery_worker()` updated to pass `allow_local` through the call chain
-- **Toggle UI** added to the webhook create/edit form in all four skins — animated switch with status hint text
-- **Yellow `local` badge** shown on webhook cards where `allow_local` is active
-- User-Agent header updated to `Heimdall-IDS/0.3`
-
 ---
 
-### v0.2 — May 2026
-**AI Explain for all skins + airgap, performance, and security audits**
+## Architecture
 
-#### AI Explain — all skins
-- `AIExplainView` settings component added to Original, Mosaic, and Seal (Chronicles had it since v0.1)
-- `AIExplanationPanel` in the Explain dialog for all four skins
-- `aiSettings`, `aiExplanations`, `aiEnabledRef` state and `requestAiExplain()` helper in every skin's `App` component
-- SSE auto-explain on new alerts in all four skins
-- Nav label fix: key-based auto-capitalisation would have produced "Ai-explain"; replaced with an explicit label map in all four nav renderers
-
-#### Airgap audit
-- **Google Fonts removed** — `@import url('https://fonts.googleapis.com/...')` was in all four skin stylesheets and `login.html`, making outbound HTTP requests on every page load
-- Replaced with system font stack: `var(--font-sans)` and `var(--font-mono)` CSS variables
-- **`.jsx` source files blocked** — the static file handler now returns HTTP 403 for `.jsx` and `.py` requests
-
-#### Performance audit
-- SQLite PRAGMA tuning added to `database.py` and `dns_db.py`: `cache_size = -8000` (8 MB), `temp_store = MEMORY`, `mmap_size = 268435456` (256 MB)
-- Missing alert indexes added: `idx_a_sigid` on `alerts(sig_id)`, `idx_a_src` on `alerts(src_ip)`, `idx_a_cat` on `alerts(category)`
-- Session indexes added: `idx_sess_tok` on `sessions(token)`, `idx_sess_exp` on `sessions(expires_at)`
-- PRAGMA tuning added to `auth.py`: WAL mode, `cache_size = -2000`
-- `get_alert_meta` consolidated from 3 separate `_conn()` calls to 1 shared connection per request
-
-#### Security audit
-- Security headers on every HTTP response: `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, full `Content-Security-Policy`
-- Login rate limiting: 10 failures per IP per 5-minute window → HTTP 429 + 2-second delay; resets on successful login
-- AI API key obfuscation: stored as `obf1:<base64(XOR(key, sha256_mask))>` in config DB; never returned to frontend
-- Webhook SSRF protection: `_ssrf_safe()` blocks RFC-1918 and loopback destinations by default
-- Per-webhook `allow_local` flag for explicit LAN tool opt-in
-
----
-
-### v0.1 — May 2026
-**Initial release**
-
-#### Bug fix
-- **Chronicles "Explain" button** was broken. `showExplain`/`explainAlert` state lived at the `App` level but the `ExplainDialog` was never rendered there. Fixed by moving both state variables into `ChronicleView` where the dialog now correctly lives, renders, and closes.
-
-#### AI Explanation system (new module: `ai_explain.py`)
-- Uses Python stdlib `urllib` only — no third-party packages, fully airgap-safe
-- Supports OpenAI (`gpt-4o-mini`), Anthropic (`claude-3-5-haiku-20241022`), DeepSeek (`deepseek-chat`)
-- Executive prompt: 3–5 sentence summary — what triggered the alert, likely threat type, recommended action
-- Auto-explain on every new SSE alert when enabled
-- API key stored in `config.db` (XOR-obfuscated); UI setting takes precedence over `heimdall.conf`
-
-#### New API endpoints
-- `GET /ai-config` — returns `{provider, enabled, api_key_set}`. Never returns the raw key.
-- `PUT /ai-config` — admin-only; update provider, API key, enabled toggle
-- `POST /ai-explain` — accepts alert JSON body, returns `{explanation: "..."}` string
-
-#### New UI (Chronicles skin)
-- **AI Explain** nav tab with full settings panel (provider selector, API key field, enable/disable toggle)
-- **AI Summary** tab inside the Explain dialog alongside Threat Intel
-- `AIExplanationPanel` component: spinner while loading, summary text when ready, error state, Refresh button
-
-#### Other changes
-- **Install-time password display** — `postinst` generates a random password, prints it in a bordered box to the terminal, saves to `/etc/heimdall/.credentials` (mode 640, root:heimdall)
-- **License changed** from MIT to GNU AGPL v3.0
-- **Versioning** started at v0.1; `build-deb.sh` updated accordingly
-
+```
+┌─────────────────────────────────────────────────────┐
+│                     Browser                         │
+│  React (no build step) · 4 skins · SSE consumer     │
+└────────────────────┬────────────────────────────────┘
+                     │ HTTP / SSE
+┌────────────────────▼────────────────────────────────┐
+│              Heimdall HTTP Server                   │
+│  ThreadedHTTPServer · BaseHTTPRequestHandler        │
+│                                                     │
+│  ┌──────────┐  ┌──────────┐  ┌──────────────────┐   │
+│  │ tail     │  │ purge    │  │ delivery_worker   │  │
+│  │ thread   │  │ thread   │  │ (webhooks)        │  │
+│  └────┬─────┘  └────┬─────┘  └──────────────────┘   │
+│       │              │                              │
+│  ┌────▼──────────────▼───────────────────────────┐  │
+│  │              SQLite (3 databases)             │  │
+│  │  events.db · dns.db · config.db               │  │
+│  └───────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────┘
+         ▲
+         │ reads
+┌────────┴────────┐
+│  eve.json       │
+│  (Suricata)     │
+└─────────────────┘
+```
 ---
 
 ## License
@@ -508,4 +363,4 @@ This means:
 
 ---
 
-
+*Heimdall IDS — G-Sentry*
