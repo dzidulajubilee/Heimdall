@@ -1,5 +1,5 @@
 """
-Watcher IDS Dashboard — Threat Intelligence Database
+Heimdall IDS Dashboard — Threat Intelligence Database
 Custom explanations for Suricata signatures, keyed by SID or category.
 
 Lookup priority:
@@ -14,7 +14,7 @@ import json
 import logging
 import time
 
-log = logging.getLogger("watcher.threat_intel")
+log = logging.getLogger("heimdall.threat_intel")
 
 
 class ThreatIntelDB:

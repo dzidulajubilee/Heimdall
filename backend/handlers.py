@@ -50,7 +50,13 @@ from config import FRONTEND_DIR, PING_EVERY, RETAIN_DAYS, SESSION_TTL
 log = logging.getLogger("heimdall.http")
 
 VALID_STATUSES  = {"acknowledged", "investigating", "closed"}
-_MAX_DELETE_IDS = 500   # mirrors database._MAX_DELETE_IDS
+_MAX_DELETE_IDS  = 500         # mirrors database._MAX_DELETE_IDS
+_MAX_BULK_IDS    = 500         # cap for bulk-status operations
+_MAX_BODY        = 4_194_304   # 4 MB — hard cap on request body reads
+_MAX_NOTE_LEN    = 4_000       # max characters in an alert note
+_MAX_FIELD_LEN   = 64          # max username / role field length
+_MAX_PASSWORD_LEN = 256        # max password length (longer is wasteful for PBKDF2)
+_MAX_URL_LEN     = 2_048       # max webhook URL length
 
 
 import ai_explain as _ai
@@ -128,6 +134,34 @@ class Handler(BaseHTTPRequestHandler):
 
     _PUBLIC_FRONTEND = {"/frontend/login.js"}
 
+    def _check_origin(self) -> bool:
+        """
+        CSRF defence-in-depth: validate Origin or Referer on state-changing requests.
+        Allows same-host requests.  Absent Origin/Referer passes (many legitimate
+        clients omit it; the SameSite=Strict cookie already blocks cross-site
+        cookie submission).  Blocks requests whose Origin header is set to a
+        clearly different host.
+        """
+        origin = self.headers.get("Origin", "")
+        if not origin:
+            # No Origin — fall back to Referer for old clients
+            referer = self.headers.get("Referer", "")
+            if not referer:
+                return True   # no header at all — allow (SameSite=Strict is primary)
+            origin = referer
+        try:
+            from urllib.parse import urlparse as _up
+            parsed = _up(origin)
+            host   = self.headers.get("Host", "")
+            # Strip port from both sides for comparison
+            origin_host = parsed.netloc or parsed.path.split("/")[0]
+            if origin_host and host and origin_host.split(":")[0] != host.split(":")[0]:
+                self._json({"error": "Forbidden: cross-origin request"}, 403)
+                return False
+        except Exception:
+            pass  # parse error → allow
+        return True
+
     def _require_auth(self) -> bool:
         if self._authed():
             return True
@@ -154,11 +188,15 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def _json(self, data, status: int = 200):
-        """Send a JSON response. Used for small API replies and error responses."""
+        """Send a JSON response with security headers. Used for API replies and error responses."""
         body = json.dumps(data).encode()
         self.send_response(status)
-        self.send_header("Content-Type",   "application/json")
-        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Content-Type",           "application/json")
+        self.send_header("Content-Length",         str(len(body)))
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options",        "DENY")
+        self.send_header("Referrer-Policy",        "no-referrer")
+        self.send_header("Cache-Control",          "no-cache, no-store")
         self.end_headers()
         self.wfile.write(body)
 
@@ -180,7 +218,8 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _file(self, path: Path, content_type: str, no_cache: bool = True):
+    def _file(self, path: Path, content_type: str,
+              no_cache: bool = True, immutable: bool = False):
         if not path.exists():
             self.send_error(404, f"{path.name} not found")
             return
@@ -196,8 +235,11 @@ class Handler(BaseHTTPRequestHandler):
             "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
             "font-src 'self'; connect-src 'self'; frame-ancestors 'none';")
         self.send_header("X-Robots-Tag", "noindex, nofollow")
-        if no_cache:
-            self.send_header("Cache-Control", "no-cache")
+        if immutable:
+            # Fonts/JS/CSS are content-hashed at build time — safe to cache for 1 year
+            self.send_header("Cache-Control", "public, max-age=31536000, immutable")
+        elif no_cache:
+            self.send_header("Cache-Control", "no-cache, no-store")
         self.end_headers()
         self.wfile.write(data)
 
@@ -211,6 +253,12 @@ class Handler(BaseHTTPRequestHandler):
     def _read_json(self):
         try:
             n = int(self.headers.get("Content-Length", 0))
+            if n > _MAX_BODY:
+                self._json({"error": "Request body too large"}, 413)
+                return None, True
+            if n < 0:
+                self._json({"error": "Bad request"}, 400)
+                return None, True
             return json.loads(self.rfile.read(n)), None
         except Exception:
             self._json({"error": "Bad request"}, 400)
@@ -310,6 +358,8 @@ class Handler(BaseHTTPRequestHandler):
             self._do_login(); return
         if not self._require_auth():
             return
+        if not self._check_origin():
+            return
 
         if p.path == "/users":
             self._user_create()
@@ -353,6 +403,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_PUT(self):
         if not self._require_auth(): return
+        if not self._check_origin(): return
         p = urlparse(self.path)
         if p.path == "/ai-config":
             self._ai_config_update()
@@ -373,6 +424,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         if not self._require_auth(): return
+        if not self._check_origin(): return
         p = urlparse(self.path)
         if p.path == "/alerts":
             if not self._require_role("admin"): return
@@ -427,9 +479,12 @@ class Handler(BaseHTTPRequestHandler):
         if suffix in (".jsx", ".py"):  # never serve raw source
             self.send_error(403); return
         ctype  = self._MIME.get(suffix, "application/octet-stream")
-        font_exts = (".woff2", ".woff", ".ttf")
-        no_cache  = suffix in (".html",)
-        self._file(target, ctype, no_cache=no_cache)
+        # Immutable assets (fonts, compiled JS, CSS) get a long-lived cache.
+        # Only HTML is no-cache so skin/config changes are reflected immediately.
+        immutable_exts = (".woff2", ".woff", ".ttf", ".js", ".css")
+        no_cache       = suffix in (".html",)
+        self._file(target, ctype, no_cache=no_cache,
+                   immutable=suffix in immutable_exts)
 
     # ── Auth ─────────────────────────────────────────────────────────────────
 
@@ -510,6 +565,8 @@ class Handler(BaseHTTPRequestHandler):
         status    = body.get("status")
         if not isinstance(alert_ids, list) or not alert_ids:
             self._json({"error": "alert_ids (list) is required"}, 400); return
+        if len(alert_ids) > _MAX_BULK_IDS:
+            self._json({"error": f"maximum {_MAX_BULK_IDS} ids per request"}, 400); return
         if status not in VALID_STATUSES:
             self._json({"error": f"status must be one of {sorted(VALID_STATUSES)}"}, 400); return
         self.db.bulk_set_status(alert_ids, status, self._username())
@@ -550,6 +607,8 @@ class Handler(BaseHTTPRequestHandler):
         note = str(body.get("note", "")).strip()
         if not note:
             self._json({"error": "note cannot be empty"}, 400); return
+        if len(note) > _MAX_NOTE_LEN:
+            self._json({"error": f"note exceeds maximum length of {_MAX_NOTE_LEN} characters"}, 400); return
         self._json(self.db.add_note(alert_id, self._username(), note), 201)
 
     # ── Table endpoints ───────────────────────────────────────────────────────
@@ -594,6 +653,8 @@ class Handler(BaseHTTPRequestHandler):
         allow_local = bool(body.get("allow_local", False))
         if not name or not url:
             self._json({"error": "name and url are required"}, 400); return
+        if len(url) > _MAX_URL_LEN:
+            self._json({"error": f"url exceeds maximum length of {_MAX_URL_LEN}"}, 400); return
         if wtype not in ("slack", "discord", "generic"):
             self._json({"error": "type must be slack, discord, or generic"}, 400); return
         self._json(self.wdb.create(name, wtype, url, severities, enabled, allow_local), 201)
@@ -632,6 +693,10 @@ class Handler(BaseHTTPRequestHandler):
         role     = str(body.get("role", "analyst")).strip()
         if not username or not password:
             self._json({"error": "username and password are required"}, 400); return
+        if len(username) > _MAX_FIELD_LEN:
+            self._json({"error": f"username exceeds maximum length of {_MAX_FIELD_LEN}"}, 400); return
+        if len(password) > _MAX_PASSWORD_LEN:
+            self._json({"error": f"password exceeds maximum length of {_MAX_PASSWORD_LEN}"}, 400); return
         if role not in ("admin", "analyst", "viewer"):
             self._json({"error": "role must be admin, analyst, or viewer"}, 400); return
         user = self.um.create(username, password, role)
@@ -864,6 +929,8 @@ class Handler(BaseHTTPRequestHandler):
         content = body.get('content', '')
         if not isinstance(content, str) or not content.strip():
             self._json({'error': 'content field is required'}, 400); return
+        if len(content) > _MAX_BODY:
+            self._json({'error': 'content exceeds maximum allowed size'}, 413); return
         s      = self._session()
         user   = s['username'] if s else 'import'
         result = self.ti_db.import_htf(content, imported_by=user)

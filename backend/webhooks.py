@@ -319,7 +319,7 @@ def deliver(url: str, payload: dict, allow_local: bool = False) -> str | None:
         data=body,
         headers={
             "Content-Type": "application/json",
-            "User-Agent":   "Heimdall-IDS/0.9",
+            "User-Agent":   "Heimdall-IDS/1.1",
         },
         method="POST",
     )

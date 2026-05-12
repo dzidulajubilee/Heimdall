@@ -15,13 +15,16 @@ import time
 import urllib.request
 import urllib.error
 
-# ── API key obfuscation (XOR + b64, machine-path keyed) ───────────────────────
+# ── API key obfuscation (XOR + b64) ─────────────────────────────────────────
+# This is mild obfuscation to prevent accidental exposure of API keys in
+# backups or log snapshots.  It is NOT encryption — the key is fully
+# recoverable from the source.  For stronger protection, run Heimdall behind
+# a secrets manager or use OS-level filesystem encryption.
 _OBF_SEED = b"heimdall-ids-ai-key-v1"
 
 def _derive_mask(length: int) -> bytes:
-    """Derive a repeating mask from seed + DB path."""
-    seed = _OBF_SEED
-    h = hashlib.sha256(seed).digest()
+    """Derive a repeating XOR mask from the fixed seed."""
+    h = hashlib.sha256(_OBF_SEED).digest()
     mask = (h * ((length // 32) + 1))[:length]
     return mask
 

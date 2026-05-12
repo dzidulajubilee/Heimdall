@@ -1,6 +1,8 @@
 # Heimdall IDS Dashboard
 
 **A self-hosted, fully airgapped network intrusion detection dashboard for Suricata.**  
+Built by G-Sentry · Licensed under [GNU AGPL v3.0](LICENSE)
+
 ---
 
 ## What is Heimdall?
@@ -31,8 +33,7 @@ Heimdall IDS is a lightweight, single-binary web dashboard that sits on top of [
 9. [Security](#security)
 10. [Building from Source](#building-from-source)
 11. [Changelog](#changelog)
-12. [Architecture](#architecture)
-13. [License](#license)
+12. [License](#license)
 
 ---
 
@@ -300,6 +301,22 @@ The build script:
 
 ## Changelog
 
+### v1.1 — May 2026
+
+**Security hardening, performance improvements, and code quality fixes:**
+
+- **Security (high):** `_read_json()` had no body-size limit — a request with `Content-Length: 100000000` would attempt to read 100 MB into memory. Added `_MAX_BODY = 4 MB` hard cap; returns HTTP 413 if exceeded.
+- **Security (medium):** `_json()` (used for all small API replies and error responses) was missing security headers (`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Cache-Control: no-store`). All JSON responses now carry the full header set.
+- **Security (medium):** Added CSRF Origin/Referer validation on all state-changing requests (POST/PUT/DELETE). Requests with a mismatched `Origin` header are rejected with HTTP 403. `SameSite=Strict` on the session cookie remains the primary CSRF control; Origin checking is defence-in-depth.
+- **Security (medium):** `_bulk_alert_status()` had no cap on the `alert_ids` list size. An analyst could send tens of thousands of IDs, generating a massive `IN (...)` SQL clause. Added `_MAX_BULK_IDS = 500` cap, matching `delete-selected`.
+- **Security (low):** Added field-length limits: usernames ≤ 64 chars, passwords ≤ 256 chars, alert notes ≤ 4000 chars, webhook URLs ≤ 2048 chars, HTF import content ≤ 4 MB.
+- **Security (low):** Fixed misleading comment in `ai_explain._derive_mask()` that claimed the mask was "machine-path keyed" when it was actually static. Comment now accurately describes the mild obfuscation.
+- **Performance:** `DedupFilter.is_duplicate()` used an O(n) linear scan over a deque of up to 10,000 entries. Replaced with a parallel `set` for O(1) membership tests; deque retained for ordered expiry eviction.
+- **Performance:** Static assets (compiled JS, CSS, fonts) now served with `Cache-Control: public, max-age=31536000, immutable` instead of `no-cache`. These files are content-stable between deploys, so browser caching dramatically reduces repeated-visit load.
+- **Bug:** `User-Agent` header in webhook deliveries still read `Heimdall-IDS/0.9`. Updated to `1.1`.
+- **Code quality:** Module docstrings in `threat_intel.py` and `suppression.py` said "Watcher IDS Dashboard" (a legacy project name). Corrected to "Heimdall IDS Dashboard". Logger names (`watcher.threat_intel`, `watcher.suppression`) updated to match.
+- **Code quality:** Dead variable `font_exts` in `_serve_static()` removed (was defined but never used — remnant of an incomplete feature).
+
 ### v1.0 — May 2026
 
 **Seven bugs fixed — Threat Intel and Suppression fully operational:**
@@ -317,39 +334,105 @@ The build script:
 - All skins now define `--sans`, `--teal`, and `--accent-rgb` in `:root`, eliminating silent fallback reliance in shared JSX.
 - Chronicles and Mosaic now define `--radius-sm`, `--radius-md`, `--radius-lg` as aliases for their `--r-sm`/`--r-md`/`--r-lg` tokens, matching what Original and Seal already used.
 
----
+### v0.5 — May 2026
+**Critical bug fix: service crash-restart loop on startup**
+
+- **Bug:** `handlers.py` used `threading.Lock()` at module level to initialise `_LOGIN_LOCK` (introduced in the v0.2 security audit), but `import threading` was missing from the file's imports block. Python evaluates module-level statements the instant a file is imported, so `server.py` crashed on its very first `from handlers import Handler` with `NameError: name 'threading' is not defined` — before the HTTP server could start. systemd detected the crash and restarted in a loop.
+- **Fix:** Added `import threading` to the imports block in `handlers.py`.
+- **Verified:** `py_compile` check passes; live `import handlers` confirms `threading.Lock()` initialises correctly as `<unlocked _thread.lock object>`.
 
 ---
 
-## Architecture
+### v0.4 — May 2026
+**Bundled web fonts — Inter + JetBrains Mono**
 
-```
-┌─────────────────────────────────────────────────────┐
-│                     Browser                         │
-│  React (no build step) · 4 skins · SSE consumer     │
-└────────────────────┬────────────────────────────────┘
-                     │ HTTP / SSE
-┌────────────────────▼────────────────────────────────┐
-│              Heimdall HTTP Server                   │
-│  ThreadedHTTPServer · BaseHTTPRequestHandler        │
-│                                                     │
-│  ┌──────────┐  ┌──────────┐  ┌──────────────────┐   │
-│  │ tail     │  │ purge    │  │ delivery_worker   │  │
-│  │ thread   │  │ thread   │  │ (webhooks)        │  │
-│  └────┬─────┘  └────┬─────┘  └──────────────────┘   │
-│       │              │                              │
-│  ┌────▼──────────────▼───────────────────────────┐  │
-│  │              SQLite (3 databases)             │  │
-│  │  events.db · dns.db · config.db               │  │
-│  └───────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────┘
-         ▲
-         │ reads
-┌────────┴────────┐
-│  eve.json       │
-│  (Suricata)     │
-└─────────────────┘
-```
+- Fonts are now fully bundled inside the `.deb`. Zero external font requests at runtime.
+- **Inter** (sans-serif): weights 400, 500, 600, 700 — latin subset, woff2 format
+- **JetBrains Mono** (monospace): weights 400, 500, 600 — latin subset, woff2 format
+- Total font payload: **168 KB** across 7 files
+- `frontend/fonts/fonts.css` created with `@font-face` declarations and `font-display: swap`
+- All four skin stylesheets updated to `@import url('../../fonts/fonts.css')`
+- `login.html` updated with `<link rel="stylesheet" href="fonts/fonts.css">`
+- `handlers.py` updated: `woff2/woff/ttf` MIME types added; `font-src 'self'` added to CSP; font files served with long-term cache headers
+- `build-deb.sh` updated to copy `frontend/fonts/` into the package
+- Package size: ~160 KB (v0.3) → ~318 KB (v0.4), difference is entirely the font payload
+
+---
+
+### v0.3 — May 2026
+**Webhook SSRF refined — n8n and LAN tools now supported**
+
+The v0.2 blanket private-IP block would have broken any webhook pointing to a locally-hosted tool. Replaced with a per-webhook explicit opt-in:
+
+- **`allow_local` field** added to the `webhooks` table in `config.db`
+- Automatic DB migration for existing installs (`ALTER TABLE webhooks ADD COLUMN allow_local INTEGER NOT NULL DEFAULT 0`)
+- `_ssrf_safe(url, allow_local=False)` — when `allow_local=True`, the private-IP check is bypassed entirely
+- `deliver()` and `delivery_worker()` updated to pass `allow_local` through the call chain
+- **Toggle UI** added to the webhook create/edit form in all four skins — animated switch with status hint text
+- **Yellow `local` badge** shown on webhook cards where `allow_local` is active
+- User-Agent header updated to `Heimdall-IDS/0.3`
+
+---
+
+### v0.2 — May 2026
+**AI Explain for all skins + airgap, performance, and security audits**
+
+#### AI Explain — all skins
+- `AIExplainView` settings component added to Original, Mosaic, and Seal (Chronicles had it since v0.1)
+- `AIExplanationPanel` in the Explain dialog for all four skins
+- `aiSettings`, `aiExplanations`, `aiEnabledRef` state and `requestAiExplain()` helper in every skin's `App` component
+- SSE auto-explain on new alerts in all four skins
+- Nav label fix: key-based auto-capitalisation would have produced "Ai-explain"; replaced with an explicit label map in all four nav renderers
+
+#### Airgap audit
+- **Google Fonts removed** — `@import url('https://fonts.googleapis.com/...')` was in all four skin stylesheets and `login.html`, making outbound HTTP requests on every page load
+- Replaced with system font stack: `var(--font-sans)` and `var(--font-mono)` CSS variables
+- **`.jsx` source files blocked** — the static file handler now returns HTTP 403 for `.jsx` and `.py` requests
+
+#### Performance audit
+- SQLite PRAGMA tuning added to `database.py` and `dns_db.py`: `cache_size = -8000` (8 MB), `temp_store = MEMORY`, `mmap_size = 268435456` (256 MB)
+- Missing alert indexes added: `idx_a_sigid` on `alerts(sig_id)`, `idx_a_src` on `alerts(src_ip)`, `idx_a_cat` on `alerts(category)`
+- Session indexes added: `idx_sess_tok` on `sessions(token)`, `idx_sess_exp` on `sessions(expires_at)`
+- PRAGMA tuning added to `auth.py`: WAL mode, `cache_size = -2000`
+- `get_alert_meta` consolidated from 3 separate `_conn()` calls to 1 shared connection per request
+
+#### Security audit
+- Security headers on every HTTP response: `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, full `Content-Security-Policy`
+- Login rate limiting: 10 failures per IP per 5-minute window → HTTP 429 + 2-second delay; resets on successful login
+- AI API key obfuscation: stored as `obf1:<base64(XOR(key, sha256_mask))>` in config DB; never returned to frontend
+- Webhook SSRF protection: `_ssrf_safe()` blocks RFC-1918 and loopback destinations by default
+- Per-webhook `allow_local` flag for explicit LAN tool opt-in
+
+---
+
+### v0.1 — May 2026
+**Initial release**
+
+#### Bug fix
+- **Chronicles "Explain" button** was broken. `showExplain`/`explainAlert` state lived at the `App` level but the `ExplainDialog` was never rendered there. Fixed by moving both state variables into `ChronicleView` where the dialog now correctly lives, renders, and closes.
+
+#### AI Explanation system (new module: `ai_explain.py`)
+- Uses Python stdlib `urllib` only — no third-party packages, fully airgap-safe
+- Supports OpenAI (`gpt-4o-mini`), Anthropic (`claude-3-5-haiku-20241022`), DeepSeek (`deepseek-chat`)
+- Executive prompt: 3–5 sentence summary — what triggered the alert, likely threat type, recommended action
+- Auto-explain on every new SSE alert when enabled
+- API key stored in `config.db` (XOR-obfuscated); UI setting takes precedence over `heimdall.conf`
+
+#### New API endpoints
+- `GET /ai-config` — returns `{provider, enabled, api_key_set}`. Never returns the raw key.
+- `PUT /ai-config` — admin-only; update provider, API key, enabled toggle
+- `POST /ai-explain` — accepts alert JSON body, returns `{explanation: "..."}` string
+
+#### New UI (Chronicles skin)
+- **AI Explain** nav tab with full settings panel (provider selector, API key field, enable/disable toggle)
+- **AI Summary** tab inside the Explain dialog alongside Threat Intel
+- `AIExplanationPanel` component: spinner while loading, summary text when ready, error state, Refresh button
+
+#### Other changes
+- **Install-time password display** — `postinst` generates a random password, prints it in a bordered box to the terminal, saves to `/etc/heimdall/.credentials` (mode 640, root:heimdall)
+- **License changed** from MIT to GNU AGPL v3.0
+- **Versioning** started at v0.1; `build-deb.sh` updated accordingly
+
 ---
 
 ## License

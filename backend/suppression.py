@@ -1,5 +1,5 @@
 """
-Watcher IDS Dashboard — Alert Suppression
+Heimdall IDS Dashboard — Alert Suppression
 Stores suppression rules in config.db and checks them in the tail hot-path
 using a thread-safe in-memory cache (refreshed every 30 s).
 
@@ -15,7 +15,7 @@ import logging
 import threading
 import time
 
-log = logging.getLogger("watcher.suppression")
+log = logging.getLogger("heimdall.suppression")
 
 _CACHE_TTL = 30  # seconds between cache refreshes
 

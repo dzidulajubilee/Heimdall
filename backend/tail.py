@@ -69,29 +69,33 @@ def map_severity(level: int, category: str = "") -> str:
 
 class DedupFilter:
     """
-    Sliding window deduplication using a deque of (id, expiry_time).
+    Sliding window deduplication using a deque of (id, expiry_time) for
+    ordered eviction and a set for O(1) membership tests.
     Thread-safe for a single tail thread.
     """
     def __init__(self, window_seconds: int = DEDUP_WINDOW,
                  max_size: int = MAX_DEDUP_IDS):
         self.window   = window_seconds
         self.max_size = max_size
-        self._seen: deque = deque()
+        self._seen: deque = deque()   # (alert_id, expiry_time)
+        self._ids:  set   = set()     # fast O(1) membership
 
     def _evict(self, now: float):
         while self._seen and self._seen[0][1] <= now:
-            self._seen.popleft()
+            evicted_id, _ = self._seen.popleft()
+            self._ids.discard(evicted_id)
 
     def is_duplicate(self, alert_id: str) -> bool:
         now = time.time()
         self._evict(now)
-        for aid, _ in self._seen:
-            if aid == alert_id:
-                return True
+        if alert_id in self._ids:
+            return True
         self._seen.append((alert_id, now + self.window))
+        self._ids.add(alert_id)
         # Safety cap — evict oldest if over limit
         while len(self._seen) > self.max_size:
-            self._seen.popleft()
+            evicted_id, _ = self._seen.popleft()
+            self._ids.discard(evicted_id)
         return False
 
 
