@@ -279,11 +279,11 @@ A yellow **local** badge appears on the webhook card when this is enabled, so it
 # Clone or extract the source
 cd heimdall-github/
 
-# Build current default version (0.5)
+# Build current default version
 bash build-deb.sh
 
 # Build a specific version
-bash build-deb.sh 0.6
+bash build-deb.sh 1.0
 
 # Output
 # packaging/build/heimdall-ids_0.5_all.deb
