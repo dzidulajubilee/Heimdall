@@ -1680,6 +1680,8 @@ function ThreatIntelView({ role }) {
   const [delId,       setDelId]       = useState(null);
   const [importing,   setImporting]   = useState(false);
   const [importResult,setImportResult]= useState(null);
+  const [overwrite,   setOverwrite]   = useState(false);
+  const [clearConfirm,setClearConfirm]= useState(false);
   const fileInputRef  = React.useRef(null);
   const canWrite = role==='admin'||role==='analyst';
 
@@ -1715,11 +1717,11 @@ function ThreatIntelView({ role }) {
       const r    = await fetch('/threat-intel/import', {
         method:  'POST',
         headers: {'Content-Type':'application/json'},
-        body:    JSON.stringify({ content: text }),
+        body:    JSON.stringify({ content: text, overwrite }),
       });
       const d = await r.json();
       setImportResult(d);
-      if (d.imported > 0) load();
+      if (d.imported > 0 || d.overwritten > 0) load();
     } catch(err) {
       setImportResult({ imported:0, skipped:0, errors:[String(err)], warnings:[] });
     }
@@ -1776,17 +1778,25 @@ function ThreatIntelView({ role }) {
             </button>
           )}
 
-          {/* Import */}
+          {/* Import + overwrite toggle */}
           {canWrite && (
             <>
               <input
                 ref={fileInputRef} type="file" accept=".htf,.txt"
                 style={{ display:'none' }} onChange={handleImportFile}
               />
+              <label style={{ display:'flex', alignItems:'center', gap:4, fontSize:11,
+                              fontFamily:'var(--mono)', color:'var(--tx3)', cursor:'pointer',
+                              userSelect:'none' }}
+                     title="Replace existing entries that match by SID or category">
+                <input type="checkbox" checked={overwrite} onChange={e=>setOverwrite(e.target.checked)}
+                       style={{ margin:0, cursor:'pointer' }} />
+                Overwrite
+              </label>
               <button style={actnBtn(importing ? 'var(--tx3)' : 'var(--teal,#0D9488)')}
                       disabled={importing}
                       onClick={() => fileInputRef.current?.click()}
-                      title="Import entries from a .htf file">
+                      title={overwrite ? 'Import — existing matching entries will be replaced' : 'Import — duplicates will be skipped'}>
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                   <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
                   <polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
@@ -1794,6 +1804,34 @@ function ThreatIntelView({ role }) {
                 {importing ? 'Importing…' : 'Import .htf'}
               </button>
             </>
+          )}
+
+          {/* Clear All */}
+          {role==='admin' && entries.length > 0 && (
+            clearConfirm ? (
+              <span style={{ display:'flex', alignItems:'center', gap:6 }}>
+                <span style={{ fontSize:11, color:'var(--danger,#f05454)',
+                               fontFamily:'var(--mono)' }}>Clear all?</span>
+                <button style={actnBtn('var(--danger,#f05454)')}
+                        onClick={async ()=>{
+                          await fetch('/threat-intel',{method:'DELETE'});
+                          setClearConfirm(false); load();
+                        }}>Yes, clear</button>
+                <button style={actnBtn()} onClick={()=>setClearConfirm(false)}>Cancel</button>
+              </span>
+            ) : (
+              <button style={actnBtn('var(--danger,#f05454)')}
+                      onClick={()=>setClearConfirm(true)}
+                      title="Delete all threat intel entries">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <polyline points="3 6 5 6 21 6"/>
+                  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                  <path d="M10 11v6M14 11v6"/>
+                  <path d="M9 6V4h6v2"/>
+                </svg>
+                Clear All
+              </button>
+            )
           )}
 
           {/* Add entry */}
@@ -1813,8 +1851,11 @@ function ThreatIntelView({ role }) {
                       borderRadius:'var(--radius-md,6px)', fontSize:12 }}>
           <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:4 }}>
             <span style={{ fontWeight:600, color: importResult.errors?.length ? 'var(--danger,#f05454)' : 'var(--success,#10b981)' }}>
-              {importResult.imported > 0
-                ? `✓ Imported ${importResult.imported} entr${importResult.imported===1?'y':'ies'}`
+              {importResult.imported > 0 || importResult.overwritten > 0
+                ? [
+                    importResult.imported > 0 && `✓ ${importResult.imported} imported`,
+                    importResult.overwritten > 0 && `${importResult.overwritten} overwritten`,
+                  ].filter(Boolean).join(' · ')
                 : importResult.errors?.length ? '✗ Import failed' : 'Nothing to import'}
               {importResult.skipped > 0 && ` · ${importResult.skipped} duplicate${importResult.skipped===1?'':'s'} skipped`}
             </span>

@@ -115,6 +115,14 @@ class ThreatIntelDB:
         c.execute("DELETE FROM threat_intel WHERE id = ?", (tid,))
         c.commit()
 
+    def clear_all(self) -> int:
+        """Delete every threat intel entry. Returns count of deleted rows."""
+        c = self._conn()
+        cur = c.execute("DELETE FROM threat_intel")
+        c.commit()
+        log.info("Threat intel cleared: %d entries removed", cur.rowcount)
+        return cur.rowcount
+
     # ── Lookup ────────────────────────────────────────────────────────────────
 
     def lookup(self, sig_id: int = None, category: str = None) -> dict | None:
@@ -284,29 +292,32 @@ class ThreatIntelDB:
 
         return valid, warnings
 
-    def import_htf(self, text: str, imported_by: str = "import") -> dict:
+    def import_htf(self, text: str, imported_by: str = "import",
+                   overwrite: bool = False) -> dict:
         """
-        Parse .htf text, dedup against existing entries, create new ones.
-        Returns {imported, skipped, errors, warnings}.
+        Parse .htf text, dedup against existing entries, create/update.
+        When overwrite=True, existing entries with matching sig_id or category
+        are updated in-place rather than skipped.
+        Returns {imported, overwritten, skipped, errors, warnings}.
         """
         entries, parse_warnings = self._parse_htf(text)
 
         # Build dedup sets from existing entries (single connection)
         _c = self._conn()
         existing_sids = {
-            row[0] for row in
+            row[0]: row[1] for row in
             _c.execute(
-                "SELECT sig_id FROM threat_intel WHERE sig_id IS NOT NULL"
+                "SELECT sig_id, id FROM threat_intel WHERE sig_id IS NOT NULL"
             ).fetchall()
         }
         existing_cats = {
-            (row[0] or "").lower() for row in
+            (row[0] or "").lower(): row[1] for row in
             _c.execute(
-                "SELECT category FROM threat_intel WHERE sig_id IS NULL AND category IS NOT NULL"
+                "SELECT category, id FROM threat_intel WHERE sig_id IS NULL AND category IS NOT NULL"
             ).fetchall()
         }
 
-        imported = skipped = 0
+        imported = skipped = overwritten = 0
         errors   = []
 
         for e in entries:
@@ -314,12 +325,26 @@ class ThreatIntelDB:
                 sid = e.get("sig_id")
                 cat = (e.get("category") or "").strip()
 
-                # Skip exact duplicates
+                existing_id = None
                 if sid and sid in existing_sids:
-                    skipped += 1
-                    continue
-                if not sid and cat and cat.lower() in existing_cats:
-                    skipped += 1
+                    existing_id = existing_sids[sid]
+                elif not sid and cat and cat.lower() in existing_cats:
+                    existing_id = existing_cats[cat.lower()]
+
+                if existing_id is not None:
+                    if overwrite:
+                        self.update(
+                            existing_id,
+                            sig_id      = sid,
+                            sig_msg     = e.get("sig_msg") or "",
+                            category    = cat or None,
+                            explanation = e["explanation"],
+                            tags        = e.get("tags") or [],
+                            refs        = e.get("refs") or [],
+                        )
+                        overwritten += 1
+                    else:
+                        skipped += 1
                     continue
 
                 self.create(
@@ -332,19 +357,20 @@ class ThreatIntelDB:
                     created_by  = imported_by,
                 )
                 if sid:
-                    existing_sids.add(sid)
+                    existing_sids[sid] = -1   # sentinel — prevent double-import in same batch
                 if cat:
-                    existing_cats.add(cat.lower())
+                    existing_cats[cat.lower()] = -1
                 imported += 1
             except Exception as exc:
                 errors.append(f"Entry (sig_id={e.get('sig_id')}): {exc}")
 
-        log.info("HTF import: %d imported, %d skipped, %d errors",
-                 imported, skipped, len(errors))
+        log.info("HTF import: %d imported, %d overwritten, %d skipped, %d errors",
+                 imported, overwritten, skipped, len(errors))
         return {
-            "imported": imported,
-            "skipped":  skipped,
-            "errors":   errors,
-            "warnings": parse_warnings,
+            "imported":    imported,
+            "overwritten": overwritten,
+            "skipped":     skipped,
+            "errors":      errors,
+            "warnings":    parse_warnings,
         }
 

@@ -435,6 +435,9 @@ class Handler(BaseHTTPRequestHandler):
         elif p.path == "/dns":
             if not self._require_role("admin"): return
             self._json({"deleted": self.dns_db.clear()})
+        elif p.path == "/threat-intel":
+            if not self._require_role("admin"): return
+            self._json({"deleted": self.ti_db.clear_all()})
         elif p.path.startswith("/users/"):
             try:   self._user_delete(int(p.path.split("/")[2]))
             except (ValueError, IndexError): self.send_error(400)
@@ -931,9 +934,10 @@ class Handler(BaseHTTPRequestHandler):
             self._json({'error': 'content field is required'}, 400); return
         if len(content) > _MAX_BODY:
             self._json({'error': 'content exceeds maximum allowed size'}, 413); return
-        s      = self._session()
-        user   = s['username'] if s else 'import'
-        result = self.ti_db.import_htf(content, imported_by=user)
+        s         = self._session()
+        user      = s['username'] if s else 'import'
+        overwrite = bool(body.get('overwrite', False))
+        result    = self.ti_db.import_htf(content, imported_by=user, overwrite=overwrite)
         self._json(result, 200)
 
     # ── Suppression ───────────────────────────────────────────────────────────

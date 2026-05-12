@@ -301,6 +301,16 @@ The build script:
 
 ## Changelog
 
+### v1.2 — May 2026
+
+**Threat Intel import improvements and Clear All button:**
+
+- **Feature:** HTF import now supports an **Overwrite** mode. When the checkbox is ticked before importing, existing entries whose `sig_id` or `category` matches an entry in the file are updated in-place instead of skipped. The import result banner reports `imported`, `overwritten`, and `skipped` counts separately.
+- **Feature:** A **Clear All** button (admin only) appears in the Threat Intel action bar whenever entries exist. It requires a single inline confirmation click before deleting all entries via `DELETE /threat-intel`. Present in all four skins.
+- **Backend:** `ThreatIntelDB.import_htf()` accepts an `overwrite: bool` parameter. `existing_sids` and `existing_cats` are now `{key: id}` dicts (not sets) so the matched row ID is available for `update()` calls.
+- **Backend:** New `ThreatIntelDB.clear_all()` method — single `DELETE FROM threat_intel`, returns deleted row count.
+- **Backend:** New `DELETE /threat-intel` route (admin-only) wired to `clear_all()`.
+
 ### v1.1 — May 2026
 
 **Security hardening, performance improvements, and code quality fixes:**
