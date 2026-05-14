@@ -343,6 +343,12 @@ class ThreatIntelDB:
                             refs        = e.get("refs") or [],
                         )
                         overwritten += 1
+                        # Mark as seen so duplicate SIDs later in the same
+                        # batch don't overwrite again (or create a second entry)
+                        if sid:
+                            existing_sids[sid] = -1
+                        if cat:
+                            existing_cats[cat.lower()] = -1
                     else:
                         skipped += 1
                     continue
