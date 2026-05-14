@@ -1667,14 +1667,35 @@ function ThreatIntelView({ role }) {
                 ref={fileInputRef} type="file" accept=".htf,.txt"
                 style={{ display:'none' }} onChange={handleImportFile}
               />
-              <label style={{ display:'flex', alignItems:'center', gap:4, fontSize:11,
-                              fontFamily:'var(--mono)', color:'var(--tx3)', cursor:'pointer',
-                              userSelect:'none' }}
-                     title="Replace existing entries that match by SID or category">
-                <input type="checkbox" checked={overwrite} onChange={e=>setOverwrite(e.target.checked)}
-                       style={{ margin:0, cursor:'pointer' }} />
+              <button
+                onClick={() => setOverwrite(v => !v)}
+                title={overwrite ? 'Overwrite ON — matching entries will be replaced' : 'Overwrite OFF — duplicates will be skipped'}
+                style={{
+                  display:'flex', alignItems:'center', gap:6,
+                  padding:'2px 10px 2px 5px',
+                  background: overwrite ? 'var(--teal,#0D9488)' : 'var(--s3)',
+                  border: overwrite ? '1px solid var(--teal,#0D9488)' : '1px solid var(--ln)',
+                  borderRadius:20, cursor:'pointer',
+                  fontSize:10, fontFamily:'var(--mono)',
+                  color: overwrite ? '#fff' : 'var(--tx3)',
+                  transition:'background .18s, border-color .18s, color .18s',
+                  flexShrink:0,
+                }}>
+                <span style={{
+                  width:24, height:13, borderRadius:7,
+                  background: overwrite ? 'rgba(255,255,255,.28)' : 'var(--s4)',
+                  position:'relative', display:'inline-block',
+                  flexShrink:0, transition:'background .18s',
+                }}>
+                  <span style={{
+                    position:'absolute', top:1, left: overwrite ? 11 : 1,
+                    width:11, height:11, borderRadius:'50%',
+                    background: overwrite ? '#fff' : 'var(--tx3)',
+                    transition:'left .18s, background .18s',
+                  }}/>
+                </span>
                 Overwrite
-              </label>
+              </button>
               <button style={actnBtn(importing ? 'var(--tx3)' : 'var(--teal,#0D9488)')}
                       disabled={importing}
                       onClick={() => fileInputRef.current?.click()}
