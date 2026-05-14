@@ -16,6 +16,8 @@ import ipaddress
 import socket as _socket
 from queue import Queue, Empty
 
+import threading
+
 log = logging.getLogger("heimdall.webhooks")
 
 ALL_SEVERITIES   = ["critical", "high", "medium", "low", "info"]
@@ -23,6 +25,32 @@ MAX_RETRIES      = 3
 RETRY_DELAY      = 5       # seconds between retries
 QUEUE_MAX        = 1000    # max pending deliveries
 DELIVERY_TIMEOUT = 10      # seconds per HTTP request
+
+# ── Per-SID deduplication ─────────────────────────────────────────────────────
+# When many alerts with the same SID fire in a burst (e.g. a scan or flood),
+# only the first delivery per webhook fires.  Subsequent ones are suppressed
+# until the cooldown window expires.
+_SID_COOLDOWN    = 60      # seconds — one notification per (webhook, SID) per window
+_sid_last: dict  = {}      # (webhook_id, sig_id) → last delivery epoch
+_sid_lock        = threading.Lock()
+
+def _is_sid_suppressed(wid: int, sig_id) -> bool:
+    """Return True if (webhook, SID) already fired within the cooldown window."""
+    if sig_id is None:
+        return False  # alerts without a SID always pass through
+    key = (wid, sig_id)
+    now = time.time()
+    with _sid_lock:
+        last = _sid_last.get(key, 0)
+        if now - last < _SID_COOLDOWN:
+            return True
+        _sid_last[key] = now
+        # Prune stale entries opportunistically to keep memory bounded
+        if len(_sid_last) > 10_000:
+            cutoff = now - _SID_COOLDOWN
+            for k in [k for k, v in _sid_last.items() if v < cutoff]:
+                del _sid_last[k]
+        return False
 
 
 # ── Storage ───────────────────────────────────────────────────────────────────
@@ -319,7 +347,7 @@ def deliver(url: str, payload: dict, allow_local: bool = False) -> str | None:
         data=body,
         headers={
             "Content-Type": "application/json",
-            "User-Agent":   "Heimdall-IDS/1.1",
+            "User-Agent":   "Heimdall-IDS/1.2",
         },
         method="POST",
     )
@@ -387,12 +415,19 @@ def dispatch(alert: dict, wdb: WebhookDB):
     """
     Called by tail_thread for each new alert.
     Checks every enabled webhook and enqueues delivery if the alert's
-    severity matches the webhook's configured filter.
+    severity matches the webhook's configured filter, and the SID has not
+    already fired for this webhook within the dedup cooldown window.
     """
-    sev = alert.get("severity", "info")
+    sev    = alert.get("severity", "info")
+    sig_id = alert.get("sig_id")
     for wh in wdb.get_all():
         if not wh.get("enabled"):
             continue
         if sev not in wh.get("severities", ALL_SEVERITIES):
+            continue
+        wid = wh["id"]
+        if _is_sid_suppressed(wid, sig_id):
+            log.debug("Webhook %d: SID %s suppressed (within %ds cooldown)",
+                      wid, sig_id, _SID_COOLDOWN)
             continue
         enqueue(wh, alert)
