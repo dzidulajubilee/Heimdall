@@ -2708,92 +2708,76 @@ function ReplayFlushPanel({ onFlushed }) {
     setFlushing(false);
   }
 
-  const cardStyle = {
-    background:'var(--s1)', border:'1px solid var(--ln)',
-    borderRadius:'var(--radius-lg,10px)', marginBottom:12, overflow:'hidden',
-  };
-  const hdrStyle = {
-    padding:'10px 16px', background:'var(--s2)', borderBottom:'1px solid var(--ln)',
-    fontSize:11, fontWeight:600, color:'var(--tx1)', letterSpacing:'.06em',
-    textTransform:'uppercase', display:'flex', alignItems:'center', gap:8,
-  };
-  const bodyStyle = { padding:'14px 16px' };
-  const desc = { fontSize:12, color:'var(--tx2)', lineHeight:1.65, marginBottom:12 };
-  const btnStyle = (color, disabled) => ({
-    padding:'6px 16px', border:`1px solid ${color}`, borderRadius:'var(--radius-sm,4px)',
-    background:'transparent', color, fontSize:12, cursor: disabled ? 'not-allowed' : 'pointer',
-    opacity: disabled ? .5 : 1,
-  });
+  const statusBox = (bg, border, color, text) => (
+    <div style={{marginBottom:10, padding:'8px 12px', background:bg,
+        border:`1px solid ${border}`, borderRadius:'var(--radius-sm,4px)',
+        fontSize:12, fontFamily:'var(--mono)', color}}>
+      {text}
+    </div>
+  );
 
   return (
     <>
       {/* Replay card */}
-      <div style={cardStyle}>
-        <div style={hdrStyle}>
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.87"/>
-          </svg>
-          Replay eve.json
+      <div className="settings-card" style={{marginBottom:12}}>
+        <div className="settings-card-header">
+          <span className="settings-card-title" style={{display:'flex',alignItems:'center',gap:8}}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.87"/>
+            </svg>
+            Replay eve.json
+          </span>
         </div>
-        <div style={bodyStyle}>
-          <div style={desc}>
+        <div className="settings-card-body">
+          <div style={{fontSize:12, color:'var(--tx2)', lineHeight:1.65, marginBottom:12}}>
             Re-read <code style={{fontFamily:'var(--mono)',fontSize:11}}>eve.json</code> from the
             beginning and insert any events missed while Heimdall was down. Runs in the background —
             the dashboard stays usable while it works.
           </div>
-          {replay.running && (
-            <div style={{marginBottom:10, padding:'8px 12px', background:'rgba(99,102,241,.08)',
-                border:'1px solid rgba(99,102,241,.25)', borderRadius:'var(--radius-sm,4px)',
-                fontSize:12, fontFamily:'var(--mono)', color:'var(--accent)'}}>
-              <span style={{marginRight:8}}>⟳</span>
-              Running… {replay.total.toLocaleString()} lines read &nbsp;·&nbsp;
-              {replay.inserted.toLocaleString()} inserted &nbsp;·&nbsp;
-              {replay.skipped.toLocaleString()} skipped
-            </div>
+          {replay.running && statusBox('rgba(99,102,241,.08)','rgba(99,102,241,.25)','var(--accent)',
+            <>⟳&nbsp; Running… {replay.total.toLocaleString()} lines read &nbsp;·&nbsp; {replay.inserted.toLocaleString()} inserted &nbsp;·&nbsp; {replay.skipped.toLocaleString()} skipped</>)}
+          {replay.done && !replay.running && statusBox(
+            replay.error ? 'rgba(240,84,84,.08)' : 'rgba(16,185,129,.08)',
+            replay.error ? 'rgba(240,84,84,.3)'  : 'rgba(16,185,129,.3)',
+            replay.error ? 'var(--danger,#f05454)' : 'var(--success,#10b981)',
+            replay.error ? `Error: ${replay.error}`
+              : `Done — ${replay.total.toLocaleString()} lines · ${replay.inserted.toLocaleString()} inserted · ${replay.skipped.toLocaleString()} skipped`
           )}
-          {replay.done && !replay.running && (
-            <div style={{marginBottom:10, padding:'8px 12px',
-                background: replay.error ? 'rgba(240,84,84,.08)' : 'rgba(16,185,129,.08)',
-                border:`1px solid ${replay.error ? 'rgba(240,84,84,.3)' : 'rgba(16,185,129,.3)'}`,
-                borderRadius:'var(--radius-sm,4px)', fontSize:12, fontFamily:'var(--mono)',
-                color: replay.error ? 'var(--danger,#f05454)' : 'var(--success,#10b981)'}}>
-              {replay.error
-                ? `Error: ${replay.error}`
-                : `Done — ${replay.total.toLocaleString()} lines · ${replay.inserted.toLocaleString()} inserted · ${replay.skipped.toLocaleString()} skipped`}
-            </div>
-          )}
-          <button style={btnStyle('var(--accent)', replay.running)}
-                  disabled={replay.running} onClick={startReplay}>
+          <button style={{padding:'6px 16px', border:'1px solid var(--accent)',
+              borderRadius:'var(--radius-sm,4px)', background:'transparent',
+              color:'var(--accent)', fontSize:12,
+              cursor: replay.running ? 'not-allowed' : 'pointer',
+              opacity: replay.running ? .5 : 1}}
+              disabled={replay.running} onClick={startReplay}>
             {replay.running ? 'Replaying…' : 'Start Replay'}
           </button>
         </div>
       </div>
 
       {/* Flush card */}
-      <div style={cardStyle}>
-        <div style={hdrStyle}>
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6m4-6v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
-          </svg>
-          Flush All Records
+      <div className="settings-card" style={{marginBottom:12}}>
+        <div className="settings-card-header">
+          <span className="settings-card-title" style={{display:'flex',alignItems:'center',gap:8}}>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6m4-6v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+            </svg>
+            Flush All Records
+          </span>
         </div>
-        <div style={bodyStyle}>
-          <div style={desc}>
+        <div className="settings-card-body">
+          <div style={{fontSize:12, color:'var(--tx2)', lineHeight:1.65, marginBottom:12}}>
             Delete every alert, flow, DNS query, and HTTP event from the Heimdall database.
             The <code style={{fontFamily:'var(--mono)',fontSize:11}}>eve.json</code> file and Suricata
             are untouched — new events will continue coming in as usual. There is no undo; use
             <strong style={{color:'var(--tx1)'}}> Replay</strong> to re-read records from eve.json.
           </div>
-          {flushDone && (
-            <div style={{marginBottom:10, padding:'8px 12px', background:'rgba(16,185,129,.08)',
-                border:'1px solid rgba(16,185,129,.3)', borderRadius:'var(--radius-sm,4px)',
-                fontSize:12, fontFamily:'var(--mono)', color:'var(--success,#10b981)'}}>
-              {flushDone}
-            </div>
-          )}
+          {flushDone && statusBox('rgba(16,185,129,.08)','rgba(16,185,129,.3)','var(--success,#10b981)', flushDone)}
           {!showFlushConfirm ? (
-            <button style={btnStyle('var(--danger,#f05454)', flushing)}
-                    disabled={flushing} onClick={() => setShowFlushConfirm(true)}>
+            <button style={{padding:'6px 16px', border:'1px solid var(--danger,#f05454)',
+                borderRadius:'var(--radius-sm,4px)', background:'transparent',
+                color:'var(--danger,#f05454)', fontSize:12,
+                cursor: flushing ? 'not-allowed' : 'pointer', opacity: flushing ? .5 : 1}}
+                disabled={flushing} onClick={() => setShowFlushConfirm(true)}>
               {flushing ? 'Flushing…' : 'Flush All Records'}
             </button>
           ) : (
@@ -2803,8 +2787,14 @@ function ReplayFlushPanel({ onFlushed }) {
                 ⚠ This will permanently delete all records. Are you sure?
               </div>
               <div style={{display:'flex', gap:8}}>
-                <button style={btnStyle('var(--danger,#f05454)', false)} onClick={doFlush}>Yes, flush everything</button>
-                <button style={{...btnStyle('var(--tx3)', false)}} onClick={() => setShowFlushConfirm(false)}>Cancel</button>
+                <button style={{padding:'6px 16px', border:'1px solid var(--danger,#f05454)',
+                    borderRadius:'var(--radius-sm,4px)', background:'transparent',
+                    color:'var(--danger,#f05454)', fontSize:12, cursor:'pointer'}}
+                    onClick={doFlush}>Yes, flush everything</button>
+                <button style={{padding:'6px 16px', border:'1px solid var(--tx3,#888)',
+                    borderRadius:'var(--radius-sm,4px)', background:'transparent',
+                    color:'var(--tx3,#888)', fontSize:12, cursor:'pointer'}}
+                    onClick={() => setShowFlushConfirm(false)}>Cancel</button>
               </div>
             </div>
           )}
@@ -2813,6 +2803,7 @@ function ReplayFlushPanel({ onFlushed }) {
     </>
   );
 }
+
 
 function App() {
   const [alerts,     setAlerts]     = useState([]);

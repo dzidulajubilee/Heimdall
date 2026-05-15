@@ -166,30 +166,31 @@ class AlertDB:
             log.warning("DB insert (alert): %s", e)
 
     # ── COUNT cache (5-second TTL) ────────────────────────────────────────────
-    _count_cache:       int   = 0
-    _count_cache_ts:    float = 0.0
+    _count_cache:       dict  = {}     # days_key -> count
+    _count_cache_ts:    dict  = {}     # days_key -> timestamp
     _count_cache_lock         = threading.Lock()
     _COUNT_CACHE_TTL:   int   = 5
 
     def count_alerts(self, days: int = None) -> int:
-        """Return total alert count. Cached for 5 seconds to avoid COUNT(*) on every paginated request."""
-        now = time.time()
+        """Return total alert count. Cached per unique days value for 5 seconds."""
+        days_key = days or self.retain_days
+        now      = time.time()
         with self._count_cache_lock:
-            if now - self._count_cache_ts < self._COUNT_CACHE_TTL:
-                return self._count_cache
-        cutoff = now - (days or self.retain_days) * 86400
+            if now - self._count_cache_ts.get(days_key, 0.0) < self._COUNT_CACHE_TTL:
+                return self._count_cache[days_key]
+        cutoff = now - days_key * 86400
         n = self._conn().execute(
             "SELECT COUNT(*) FROM alerts WHERE ts_epoch>=?", (cutoff,)
         ).fetchone()[0]
         with self._count_cache_lock:
-            self._count_cache    = n
-            self._count_cache_ts = now
+            self._count_cache[days_key]    = n
+            self._count_cache_ts[days_key] = now
         return n
 
     def invalidate_count_cache(self):
         """Call after inserts/deletes that change alert count."""
         with self._count_cache_lock:
-            self._count_cache_ts = 0.0
+            self._count_cache_ts.clear()
 
     def alert_exists(self, alert_id: str) -> bool:
         """Fast existence check — used by replay to skip known alerts."""
@@ -415,6 +416,17 @@ class AlertDB:
         cutoff = time.time() - self.retain_days * 86400
         total  = 0
         c      = self._conn()
+
+        # First cascade-delete metadata for alerts that are about to be removed,
+        # so alert_notes and alert_activity never accumulate orphan rows.
+        for meta_table in ("alert_notes", "alert_activity", "alert_meta"):
+            cur = c.execute(
+                f"DELETE FROM {_safe_table(meta_table)} "
+                "WHERE alert_id NOT IN (SELECT id FROM alerts WHERE ts_epoch>=?)",
+                (cutoff,),
+            )
+            total += cur.rowcount
+
         for table in ("alerts", "flows", "http_events"):
             cur    = c.execute(
                 f"DELETE FROM {_safe_table(table)} WHERE ts_epoch<?", (cutoff,)

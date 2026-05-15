@@ -8,7 +8,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-VERSION="${1:-1.3}"
+VERSION="${1:-1.4}"
 PKG="heimdall-ids_${VERSION}_all"
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 BUILD="${ROOT}/packaging/build/${PKG}"
@@ -93,17 +93,18 @@ PYEOF
 # ── 6. Frontend ───────────────────────────────────────────────────────────────
 cp "${ROOT}/frontend/react.min.js"    "${BUILD}/opt/heimdall/frontend/"
 cp "${ROOT}/frontend/react-dom.min.js" "${BUILD}/opt/heimdall/frontend/"
-cp "${ROOT}/frontend/index.html"      "${BUILD}/opt/heimdall/frontend/"
+sed "s/__HEIMDALL_VERSION__/${VERSION}/g" \
+    "${ROOT}/frontend/index.html" > "${BUILD}/opt/heimdall/frontend/index.html"
 cp "${ROOT}/frontend/login.html"      "${BUILD}/opt/heimdall/frontend/"
 cp "${ROOT}/frontend/login.js"        "${BUILD}/opt/heimdall/frontend/"
-cp "${ROOT}/frontend/skin-loader.js"  "${BUILD}/opt/heimdall/frontend/"
+sed "s/__HEIMDALL_VERSION__/${VERSION}/g" \
+    "${ROOT}/frontend/skin-loader.js" > "${BUILD}/opt/heimdall/frontend/skin-loader.js"
 mkdir -p "${BUILD}/opt/heimdall/frontend/fonts"
 cp "${ROOT}/frontend/fonts/"*.woff2   "${BUILD}/opt/heimdall/frontend/fonts/"
 cp "${ROOT}/frontend/fonts/fonts.css" "${BUILD}/opt/heimdall/frontend/fonts/"
 
 for skin in original chronicles mosaic seal; do
   cp "${ROOT}/frontend/skins/${skin}/app.js"      "${BUILD}/opt/heimdall/frontend/skins/${skin}/"
-  cp "${ROOT}/frontend/skins/${skin}/app.jsx"     "${BUILD}/opt/heimdall/frontend/skins/${skin}/"
   cp "${ROOT}/frontend/skins/${skin}/styles.css"  "${BUILD}/opt/heimdall/frontend/skins/${skin}/"
 done
 
@@ -222,17 +223,18 @@ PYEOF
 
 cp "${NOAI_DIR}/frontend/react.min.js"    "${NOAI_BUILD}/opt/heimdall/frontend/"
 cp "${NOAI_DIR}/frontend/react-dom.min.js" "${NOAI_BUILD}/opt/heimdall/frontend/"
-cp "${NOAI_DIR}/frontend/index.html"      "${NOAI_BUILD}/opt/heimdall/frontend/"
+sed "s/__HEIMDALL_VERSION__/${VERSION}/g" \
+    "${NOAI_DIR}/frontend/index.html" > "${NOAI_BUILD}/opt/heimdall/frontend/index.html"
 cp "${NOAI_DIR}/frontend/login.html"      "${NOAI_BUILD}/opt/heimdall/frontend/"
 cp "${NOAI_DIR}/frontend/login.js"        "${NOAI_BUILD}/opt/heimdall/frontend/"
-cp "${NOAI_DIR}/frontend/skin-loader.js"  "${NOAI_BUILD}/opt/heimdall/frontend/"
+sed "s/__HEIMDALL_VERSION__/${VERSION}/g" \
+    "${NOAI_DIR}/frontend/skin-loader.js" > "${NOAI_BUILD}/opt/heimdall/frontend/skin-loader.js"
 mkdir -p "${NOAI_BUILD}/opt/heimdall/frontend/fonts"
 cp "${NOAI_DIR}/frontend/fonts/"*.woff2   "${NOAI_BUILD}/opt/heimdall/frontend/fonts/"
 cp "${NOAI_DIR}/frontend/fonts/fonts.css" "${NOAI_BUILD}/opt/heimdall/frontend/fonts/"
 
 for skin in original chronicles mosaic seal; do
   cp "${NOAI_DIR}/frontend/skins/${skin}/app.js"     "${NOAI_BUILD}/opt/heimdall/frontend/skins/${skin}/"
-  cp "${NOAI_DIR}/frontend/skins/${skin}/app.jsx"    "${NOAI_BUILD}/opt/heimdall/frontend/skins/${skin}/"
   cp "${NOAI_DIR}/frontend/skins/${skin}/styles.css" "${NOAI_BUILD}/opt/heimdall/frontend/skins/${skin}/"
 done
 

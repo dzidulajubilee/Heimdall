@@ -51,6 +51,7 @@
     },
   ];
 
+  const ASSET_VERSION = '__HEIMDALL_VERSION__';
   const STORAGE_KEY = 'heimdall_skin';
   const DEFAULT_ID  = 'original';
 
@@ -74,7 +75,7 @@
       const link = document.createElement('link');
       link.id   = 'skin-css';
       link.rel  = 'stylesheet';
-      link.href = `/frontend/skins/${skinId}/styles.css`;
+      link.href = `/frontend/skins/${skinId}/styles.css?v=${ASSET_VERSION}`;
       link.onload  = resolve;
       link.onerror = resolve; // fail-open so the app still boots
       document.head.appendChild(link);
@@ -89,7 +90,7 @@
 
       const s = document.createElement('script');
       s.id      = 'skin-js';
-      s.src     = `/frontend/skins/${skinId}/app.js`;
+      s.src     = `/frontend/skins/${skinId}/app.js?v=${ASSET_VERSION}`;
       s.defer   = true;
       s.onload  = resolve;
       s.onerror = reject;

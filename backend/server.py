@@ -163,6 +163,7 @@ def main():
     threading.Thread(
         target=tail_thread,
         args=(args.eve, db, dns_db, registry, wdb),
+        kwargs={"sup_db": sup_db},
         daemon=True,
         name="tail",
     ).start()

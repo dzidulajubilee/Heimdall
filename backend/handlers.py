@@ -682,7 +682,8 @@ class Handler(BaseHTTPRequestHandler):
             "sig_msg": "Heimdall Test Alert", "category": "Test",
             "severity": "medium", "action": "allowed",
         }
-        error = deliver(wh["url"], build_payload(wh["type"], test_alert))
+        error = deliver(wh["url"], build_payload(wh["type"], test_alert),
+                        allow_local=wh.get("allow_local", False))
         self._json({"ok": error is None, "error": error})
 
     # ── Users ─────────────────────────────────────────────────────────────────

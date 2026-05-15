@@ -124,8 +124,10 @@ def parse_eve_line(raw: str):
         ts       = evt.get("timestamp", "")
         sig_id   = a.get("signature_id", 0)
         category = a.get("category", "")
-        # Stable composite ID — avoids millisecond collisions across restarts
-        uid = f"{flow_id}-{sig_id}-{ts}"
+        # Stable composite ID — includes src_ip to avoid collisions when the
+        # same sig fires multiple times in the same second from different sources,
+        # and when flow_id is 0 (common for non-flow alerts).
+        uid = f"{flow_id}-{sig_id}-{ts}-{evt.get('src_ip', '')}"
         return "alert", {
             "id":       uid,
             "ts":       ts,
@@ -213,11 +215,12 @@ def _http_summary(evt: dict) -> dict:
 
 # ── Main threads ──────────────────────────────────────────────────────────────
 
-def tail_thread(path: str, db, dns_db, registry, wdb=None):
+def tail_thread(path: str, db, dns_db, registry, wdb=None, sup_db=None):
     """
     Runs forever in a daemon thread.
     Tails eve.json, persists each event, and broadcasts SSE summaries.
     Uses sliding-window deduplication to prevent duplicate alert processing.
+    Suppression rules (sup_db.is_suppressed) are checked before insert/broadcast.
     """
     log.info("Tailing %s", path)
 
@@ -241,6 +244,10 @@ def tail_thread(path: str, db, dns_db, registry, wdb=None):
                         if etype == "alert":
                             if dedup.is_duplicate(parsed["id"]):
                                 log.debug("Skipping duplicate alert %s", parsed["id"])
+                                pos = f.tell()
+                                continue
+                            if sup_db is not None and sup_db.is_suppressed(parsed):
+                                log.debug("Alert suppressed (rule match): %s", parsed["id"])
                                 pos = f.tell()
                                 continue
                             db.insert(parsed)

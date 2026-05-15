@@ -369,6 +369,20 @@ body{font-family:var(--font);background:var(--bg);color:var(--tx1);font-size:12p
   margin-bottom: 10px;
 }
 .wh-settings-card:last-child { margin-bottom: 0; }
+.wh-top    { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.wh-name   { font-size: 13px; font-weight: 500; color: var(--tx1); flex: 1; }
+.wh-type-badge { font-size: 9px; font-weight: 700; letter-spacing: .08em; padding: 2px 7px; border-radius: var(--radius-sm); background: var(--s3); color: var(--tx2); font-family: var(--mono); }
+.wh-toggle { width: 32px; height: 18px; background: var(--s3); border-radius: 9px; position: relative; cursor: pointer; border: none; transition: background .2s; flex-shrink: 0; }
+.wh-toggle.on { background: var(--success); }
+.wh-toggle::after { content:''; position: absolute; width: 14px; height: 14px; background: white; border-radius: 50%; top: 2px; left: 2px; transition: transform .2s; }
+.wh-toggle.on::after { transform: translateX(14px); }
+.wh-url  { font-size: 10px; font-family: var(--mono); color: var(--tx2); margin-bottom: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wh-sev  { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 10px; }
+.wh-sev-pill { font-size: 9px; font-weight: 700; letter-spacing: .06em; padding: 2px 7px; border-radius: 20px; font-family: var(--mono); opacity: .5; }
+.wh-sev-pill.on { opacity: 1; }
+.wh-meta { display: flex; gap: 12px; font-size: 10px; color: var(--tx2); font-family: var(--mono); margin-bottom: 10px; }
+.wh-actions { display: flex; gap: 6px; }
+.wh-error { font-size: 10px; color: var(--danger); background: var(--danger-bg, rgba(240,84,84,.08)); padding: 5px 9px; border-radius: var(--radius-sm); margin-top: 6px; font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; }
 
 /* ── Logout Button ────────────────────────────────────────────────── */
 .logout-btn {
