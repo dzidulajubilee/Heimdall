@@ -1,13 +1,16 @@
 /**
  * Heimdall IDS — Skin Loader
- * Reads the chosen skin from localStorage, dynamically injects its CSS and JS,
- * then mounts a floating skin-switcher widget that works across all skins.
+ * Reads the chosen skin from localStorage, fetches the asset manifest to get
+ * content-hashed filenames, then injects CSS + JS for the active skin.
  *
  * Loading order:
- *   index.html → react.min.js → react-dom.min.js → skin-loader.js
- *   skin-loader.js → skins/{id}/styles.css → skins/{id}/app.js → React mounts
+ *   index.html → react.min.js → react-dom.min.js → skin-loader.js (no-cache)
+ *   skin-loader.js → manifest.json (no-cache) → skins/{id}/app-{hash}.js
+ *                                              → skins/{id}/styles-{hash}.css
  *
- * No build step required — pure vanilla JS, no framework dependency.
+ * Because every asset filename contains a content hash the browser can cache
+ * them as immutable forever — a changed file automatically gets a new URL.
+ * No manual version bumping or hard reloads ever needed.
  */
 
 (function () {
@@ -51,7 +54,6 @@
     },
   ];
 
-  const ASSET_VERSION = '__HEIMDALL_VERSION__';
   const STORAGE_KEY = 'heimdall_skin';
   const DEFAULT_ID  = 'original';
 
@@ -65,17 +67,23 @@
     return SKINS.find(s => s.id === id) || SKINS[0];
   }
 
+  /* ── Manifest fetch ──────────────────────────────────────────────────── */
+  async function fetchManifest() {
+    // Always fetch fresh — manifest.json is served no-cache.
+    const r = await fetch('/frontend/manifest.json', { cache: 'no-store' });
+    if (!r.ok) throw new Error('manifest fetch failed: ' + r.status);
+    return r.json();
+  }
+
   /* ── CSS injection ───────────────────────────────────────────────────── */
-  function injectCSS(skinId) {
+  function injectCSS(href) {
     return new Promise(resolve => {
-      // Remove any previously injected skin CSS (for hot-swap in dev)
       const old = document.getElementById('skin-css');
       if (old) old.remove();
-
       const link = document.createElement('link');
       link.id   = 'skin-css';
       link.rel  = 'stylesheet';
-      link.href = `/frontend/skins/${skinId}/styles.css?v=${ASSET_VERSION}`;
+      link.href = href;
       link.onload  = resolve;
       link.onerror = resolve; // fail-open so the app still boots
       document.head.appendChild(link);
@@ -83,14 +91,13 @@
   }
 
   /* ── JS injection ────────────────────────────────────────────────────── */
-  function injectJS(skinId) {
+  function injectJS(src) {
     return new Promise((resolve, reject) => {
       const old = document.getElementById('skin-js');
       if (old) old.remove();
-
       const s = document.createElement('script');
       s.id      = 'skin-js';
-      s.src     = `/frontend/skins/${skinId}/app.js?v=${ASSET_VERSION}`;
+      s.src     = src;
       s.defer   = true;
       s.onload  = resolve;
       s.onerror = reject;
@@ -102,13 +109,11 @@
      Fully self-styled — immune to whichever skin is active.
   ── */
   function buildSwitcher(activeSkinId) {
-    // --- remove any previous instance (hot-reload safety)
     const old = document.getElementById('skin-switcher');
     if (old) old.remove();
 
     let open = false;
 
-    /* outer wrapper */
     const wrap = document.createElement('div');
     wrap.id = 'skin-switcher';
     Object.assign(wrap.style, {
@@ -120,7 +125,6 @@
       fontSize:   '12px',
     });
 
-    /* trigger button */
     const btn = document.createElement('button');
     btn.title = 'Switch skin';
     Object.assign(btn.style, {
@@ -140,7 +144,6 @@
       lineHeight:     '1',
     });
 
-    // colour dot showing active skin's accent
     const activeSkin = skinById(activeSkinId);
     const dot = document.createElement('div');
     Object.assign(dot.style, {
@@ -154,7 +157,6 @@
     const label = document.createElement('span');
     label.textContent = activeSkin.label;
 
-    // caret
     const caret = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     caret.setAttribute('width', '9');
     caret.setAttribute('height', '9');
@@ -170,7 +172,6 @@
     btn.appendChild(label);
     btn.appendChild(caret);
 
-    /* dropdown panel */
     const panel = document.createElement('div');
     Object.assign(panel.style, {
       display:        'none',
@@ -186,7 +187,6 @@
       backdropFilter: 'blur(14px)',
     });
 
-    /* panel header */
     const hdr = document.createElement('div');
     Object.assign(hdr.style, {
       fontSize:     '9px',
@@ -199,7 +199,6 @@
     hdr.textContent = 'Choose skin';
     panel.appendChild(hdr);
 
-    /* skin options */
     SKINS.forEach(skin => {
       const row = document.createElement('div');
       const isActive = skin.id === activeSkinId;
@@ -216,15 +215,10 @@
       });
 
       if (!isActive) {
-        row.addEventListener('mouseenter', () => {
-          row.style.background = 'rgba(255,255,255,0.05)';
-        });
-        row.addEventListener('mouseleave', () => {
-          row.style.background = 'transparent';
-        });
+        row.addEventListener('mouseenter', () => { row.style.background = 'rgba(255,255,255,0.05)'; });
+        row.addEventListener('mouseleave', () => { row.style.background = 'transparent'; });
       }
 
-      /* preview swatches (3-colour strip) */
       const swatchWrap = document.createElement('div');
       Object.assign(swatchWrap.style, {
         display:      'flex',
@@ -236,15 +230,10 @@
       });
       skin.preview.forEach(c => {
         const sq = document.createElement('div');
-        Object.assign(sq.style, {
-          width:      '10px',
-          height:     '22px',
-          background: c,
-        });
+        Object.assign(sq.style, { width: '10px', height: '22px', background: c });
         swatchWrap.appendChild(sq);
       });
 
-      /* text block */
       const txt = document.createElement('div');
       Object.assign(txt.style, { flex: '1' });
 
@@ -268,7 +257,6 @@
       txt.appendChild(name);
       txt.appendChild(desc);
 
-      /* active checkmark */
       if (isActive) {
         const chk = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
         chk.setAttribute('width', '12'); chk.setAttribute('height', '12');
@@ -276,15 +264,11 @@
         chk.setAttribute('stroke', skin.accent); chk.setAttribute('stroke-width', '2');
         const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
         p.setAttribute('d', 'M2 6l2.5 2.5L10 3'); chk.appendChild(p);
-        row.appendChild(swatchWrap);
-        row.appendChild(txt);
-        row.appendChild(chk);
+        row.appendChild(swatchWrap); row.appendChild(txt); row.appendChild(chk);
       } else {
-        row.appendChild(swatchWrap);
-        row.appendChild(txt);
+        row.appendChild(swatchWrap); row.appendChild(txt);
         row.addEventListener('click', () => {
           localStorage.setItem(STORAGE_KEY, skin.id);
-          // Sync to server (non-blocking, best-effort)
           fetch('/skin', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -297,14 +281,11 @@
       panel.appendChild(row);
     });
 
-    /* toggle logic */
     btn.addEventListener('click', e => {
       e.stopPropagation();
       open = !open;
       panel.style.display = open ? 'block' : 'none';
-      btn.style.borderColor = open
-        ? 'rgba(255,255,255,0.22)'
-        : 'rgba(255,255,255,0.10)';
+      btn.style.borderColor = open ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.10)';
     });
 
     document.addEventListener('click', e => {
@@ -315,12 +296,8 @@
       }
     });
 
-    btn.addEventListener('mouseenter', () => {
-      btn.style.boxShadow = '0 2px 18px rgba(0,0,0,0.6)';
-    });
-    btn.addEventListener('mouseleave', () => {
-      btn.style.boxShadow = '0 2px 12px rgba(0,0,0,0.45)';
-    });
+    btn.addEventListener('mouseenter', () => { btn.style.boxShadow = '0 2px 18px rgba(0,0,0,0.6)'; });
+    btn.addEventListener('mouseleave', () => { btn.style.boxShadow = '0 2px 12px rgba(0,0,0,0.45)'; });
 
     wrap.appendChild(panel);
     wrap.appendChild(btn);
@@ -331,13 +308,30 @@
   async function boot() {
     const skinId = currentSkinId();
 
-    // 1. Inject the skin CSS first so the page isn't unstyled when JS mounts
-    await injectCSS(skinId);
+    // 1. Fetch the content-hash manifest (always fresh, served no-cache)
+    let manifest;
+    try {
+      manifest = await fetchManifest();
+    } catch (e) {
+      console.error('[heimdall] Could not load manifest.json:', e);
+      return;
+    }
 
-    // 2. Inject and run the skin's compiled JS (mounts React)
-    await injectJS(skinId);
+    const skinFiles = manifest[skinId];
+    if (!skinFiles) {
+      console.error('[heimdall] Skin not found in manifest:', skinId);
+      return;
+    }
 
-    // 3. Mount the skin switcher once the page is ready
+    const base = `/frontend/skins/${skinId}/`;
+
+    // 2. Inject CSS first — page won't be unstyled when JS mounts
+    await injectCSS(base + skinFiles.css);
+
+    // 3. Inject and run the compiled JS (mounts React)
+    await injectJS(base + skinFiles.js);
+
+    // 4. Mount the skin switcher
     buildSwitcher(skinId);
   }
 

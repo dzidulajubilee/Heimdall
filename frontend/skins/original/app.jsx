@@ -1279,6 +1279,7 @@ function SettingsView({ theme, setTheme, role, username, onLogout, onDataFlushed
   async function loadWebhooks() { const r = await fetch('/webhooks'); const d = await r.json(); setWebhooks(d.webhooks || []); }
 
   useEffect(() => { loadUsers(); loadHealth(); if (isAdmin) loadWebhooks(); }, []);
+  useEffect(() => { if (!isAdmin) return; const id = setInterval(loadWebhooks, 30000); return () => clearInterval(id); }, [isAdmin]);
 
   async function toggleUser(u) {
     await fetch(`/users/${u.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' },
@@ -1329,6 +1330,7 @@ function SettingsView({ theme, setTheme, role, username, onLogout, onDataFlushed
     const d = await r.json();
     setTestMsg(p => ({ ...p, [id]: d.ok ? '✓ Delivered' : '✗ ' + (d.error || 'Failed') }));
     setTimeout(() => setTestMsg(p => { const n = { ...p }; delete n[id]; return n; }), 3000);
+    loadWebhooks();
   }
 
   function initials(name) { return name.slice(0, 2).toUpperCase(); }

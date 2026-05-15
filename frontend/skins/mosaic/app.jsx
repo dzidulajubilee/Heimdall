@@ -995,6 +995,7 @@ function SettingsView({ theme, setTheme, role, username, onLogout, onDataFlushed
   async function loadHealth(){const r=await fetch('/health');const d=await r.json();setHealth(d);}
   async function loadWebhooks(){const r=await fetch('/webhooks');const d=await r.json();setWebhooks(d.webhooks||[]);}
   useEffect(()=>{loadUsers();loadHealth();if(isAdmin)loadWebhooks();},[]);
+  useEffect(()=>{if(!isAdmin)return;const id=setInterval(loadWebhooks,30000);return()=>clearInterval(id);},[isAdmin]);
   function confirmDeleteUser(u){setConfirm({title:'Delete user',body:`Delete <strong>${u.username}</strong>? Cannot be undone.`,confirmLabel:'Delete',variant:'danger',onConfirm:async()=>{await fetch(`/users/${u.id}`,{method:'DELETE'});loadUsers();}});}
   function confirmClearData(ep,label,count){setConfirm({title:`Clear all ${label}`,body:`Permanently delete <strong>${count} ${label} records</strong>. Cannot be undone.`,confirmLabel:`Clear ${label}`,variant:'warning',onConfirm:async()=>{await fetch(ep,{method:'DELETE'});loadHealth();}});}
   async function toggleWebhook(wh){await fetch(`/webhooks/${wh.id}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:!wh.enabled})});loadWebhooks();}
@@ -1005,6 +1006,7 @@ function SettingsView({ theme, setTheme, role, username, onLogout, onDataFlushed
     const d=await r.json();
     setTestMsg(p=>({...p,[id]:d.ok?'✓ Delivered':'✗ '+(d.error||'Failed')}));
     setTimeout(()=>setTestMsg(p=>{const n={...p};delete n[id];return n;}),3000);
+    loadWebhooks();
   }
   const initials=name=>name.slice(0,2).toUpperCase();
   return (
