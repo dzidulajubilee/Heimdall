@@ -483,18 +483,17 @@ class Handler(BaseHTTPRequestHandler):
         if suffix in (".jsx", ".py"):  # never serve raw source
             self.send_error(403); return
         ctype  = self._MIME.get(suffix, "application/octet-stream")
-        # manifest.json and skin-loader.js are always served fresh so the
-        # browser picks up new content-hashed asset filenames on every load.
-        # All other .js/.css files have a content hash in their name and are
-        # safe to cache as immutable for a full year.
-        no_cache_paths = ("/frontend/manifest.json", "/frontend/skin-loader.js")
-        immutable_exts = (".woff2", ".woff", ".ttf", ".js", ".css")
-        if url_path in no_cache_paths or suffix == ".html":
-            no_cache   = True
-            is_immutable = False
-        else:
-            no_cache   = False
-            is_immutable = suffix in immutable_exts
+        # Everything is served no-cache so the browser always validates on
+        # page load. For a LAN-hosted dashboard the 304 round-trip is ~1 ms
+        # and guarantees users always see the latest build without hard reloads.
+        # Fonts are the only exception — they never change between releases.
+        font_exts      = (".woff2", ".woff", ".ttf")
+        immutable_exts = (".js", ".css") + font_exts
+        # HTML is always no-cache so the browser picks up the new ?v= query
+        # string after an upgrade. JS/CSS/fonts are immutable — the ?v=VERSION
+        # suffix in the URL changes on every release, forcing a fresh fetch.
+        no_cache     = suffix == ".html"
+        is_immutable = suffix in immutable_exts
         self._file(target, ctype, no_cache=no_cache, immutable=is_immutable)
 
     # ── Auth ─────────────────────────────────────────────────────────────────

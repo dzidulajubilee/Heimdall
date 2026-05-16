@@ -7,16 +7,17 @@ Built by G-Sentry · Licensed under [GNU AGPL v3.0](LICENSE)
 
 ## What is Heimdall?
 
-Heimdall IDS is a lightweight, single-binary web dashboard that sits on top of [Suricata](https://suricata.io/) and turns raw `eve.json` output into a real-time analyst workstation. It requires no internet connection, no cloud services, and no runtime dependencies beyond Python 3.10.
+Heimdall IDS is a lightweight web dashboard that sits on top of [Suricata](https://suricata.io/) and turns raw `eve.json` output into a real-time analyst workstation. It requires no internet connection, no cloud services, and no runtime dependencies beyond Python 3.10.
 
-- **Live alert feed** — new events pushed instantly via Server-Sent Events
-- **Full triage workflow** — status tracking, analyst notes, activity log per alert
+- **Live alert feed** — new events pushed instantly via Server-Sent Events (zero polling)
+- **Full triage workflow** — per-alert status, analyst notes, and timestamped activity log
 - **Threat intelligence** — per-signature knowledge base with CVE and MITRE ATT&CK linking
-- **AI executive summaries** — auto-explain every new alert via OpenAI, Anthropic, or DeepSeek
+- **Suppression rules** — drop noisy signatures at ingestion; they never reach the database
+- **AI executive summaries** — auto-explain every alert via OpenAI, Anthropic, or DeepSeek
 - **Webhooks** — push alerts to Slack, Discord, n8n, or any HTTP endpoint
-- **Four UI skins** — Original, Chronicles, Mosaic, Seal
-- **Role-based access** — Admin, Analyst, Viewer roles
-- **Installs in one command** — ships as a `.deb` package, runs as a systemd service
+- **Four UI skins** — Original, Chronicles, Mosaic, Seal (switchable live, no restart)
+- **Role-based access** — Admin, Analyst, Viewer roles enforced at the API level
+- **Installs in one command** — ships as a `.deb` package, runs as a `systemd` service
 
 ---
 
@@ -26,14 +27,15 @@ Heimdall IDS is a lightweight, single-binary web dashboard that sits on top of [
 2. [Installation](#installation)
 3. [First Login](#first-login)
 4. [Configuration](#configuration)
-5. [Features](#features)
-6. [Skins](#skins)
-7. [AI Explanation](#ai-explanation)
-8. [Webhooks](#webhooks)
-9. [Security](#security)
-10. [Building from Source](#building-from-source)
-11. [Changelog](#changelog)
-12. [License](#license)
+5. [Architecture](#architecture)
+6. [Features](#features)
+7. [Skins](#skins)
+8. [AI Explanation](#ai-explanation)
+9. [Webhooks](#webhooks)
+10. [Security](#security)
+11. [Building from Source](#building-from-source)
+12. [Changelog](#changelog)
+13. [License](#license)
 
 ---
 
@@ -58,7 +60,7 @@ Heimdall IDS is a lightweight, single-binary web dashboard that sits on top of [
 ## Installation
 
 ```bash
-sudo apt install ./heimdall-ids_0.5_all.deb
+sudo apt install ./heimdall-ids_1.4_all.deb
 ```
 
 That's it. The installer will:
@@ -82,6 +84,10 @@ That's it. The installer will:
   Credentials saved at: /etc/heimdall/.credentials
   Change password:      sudo heimdall --password <new>
 ```
+
+### AI-Free Variant
+
+A second package — `heimdall-ids-noai` — ships without the AI Explain module. It is otherwise identical and installs the same way. Use this variant in environments where AI API connectivity is prohibited by policy.
 
 ---
 
@@ -133,6 +139,77 @@ sudo apt purge heimdall-ids          # remove including all data
 
 ---
 
+## Architecture
+
+Heimdall is a single self-contained Python process with no external runtime dependencies.
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         Heimdall Process                            │
+│                                                                     │
+│  ┌──────────────┐   ┌──────────────────────────────────────────┐   │
+│  │  tail_thread │   │            HTTP Server                   │   │
+│  │              │   │     (stdlib http.server, port 8765)      │   │
+│  │  Reads and   │   │                                          │   │
+│  │  parses      │──▶│  REST API  │  Static Files  │  SSE /events│  │
+│  │  eve.json    │   └──────────────────────────────────────────┘   │
+│  │  line by     │                      │                           │
+│  │  line        │   ┌──────────────────▼───────────────────────┐   │
+│  │              │   │            SQLite Databases               │   │
+│  │  Applies     │   │                                          │   │
+│  │  suppression │   │  events.db     config.db     dns.db      │   │
+│  │  rules       │   │  ─────────     ─────────     ──────      │   │
+│  │              │   │  alerts        users          dns         │   │
+│  │  Broadcasts  │   │  flows         sessions       queries     │   │
+│  │  to SSE      │   │  http_events   webhooks                  │   │
+│  │              │   │  alert_notes   suppression               │   │
+│  │  Dispatches  │   │  alert_activity threat_intel             │   │
+│  │  webhooks    │   │  alert_meta    ai_cache                  │   │
+│  └──────────────┘   └──────────────────────────────────────────┘   │
+│                                                                     │
+│  ┌────────────────┐  ┌───────────────┐  ┌──────────────────────┐   │
+│  │ delivery_worker│  │  purge_thread │  │    replay_thread     │   │
+│  │                │  │               │  │                      │   │
+│  │ Drains webhook │  │ Hourly purge  │  │ Re-reads eve.json    │   │
+│  │ delivery queue │  │ of old rows.  │  │ from start to fill   │   │
+│  │ with retries   │  │ Cascades to   │  │ gaps (e.g. after     │   │
+│  │ (max 3)        │  │ notes/activity│  │ downtime). Admin-    │   │
+│  └────────────────┘  └───────────────┘  │ triggered via UI.   │   │
+│                                          └──────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────┘
+         │ reads                                   │ serves
+         ▼                                         ▼
+  /var/log/suricata/              Browser (Chrome / Firefox / Safari)
+       eve.json
+  (Suricata output)           ┌─────────────────────────────────────┐
+                              │  React SPA (no build step at runtime)│
+                              │                                     │
+                              │  skin-loader.js?v=N  → styles.css?v=N  │
+                              │                      → app.js?v=N      │
+                              │                  → styles.css?v=N   │
+                              │                                     │
+                              │  Four skins: original · chronicles  │
+                              │              mosaic  · seal         │
+                              │                                     │
+                              │  Fonts: Inter + JetBrains Mono      │
+                              │  (bundled, zero external requests)  │
+                              └─────────────────────────────────────┘
+```
+
+### Key Design Decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| **Single Python process** | Zero installation complexity — no app server, no message broker, no reverse proxy required |
+| **SQLite** | Fully embedded, no separate database process, trivially backed up with `cp` |
+| **Server-Sent Events** | One-way push from server to browser; no WebSocket handshake overhead; survives proxies |
+| **stdlib-only backend** | No `pip install` needed at runtime; safe in airgapped/restricted environments |
+| **Versioned asset URLs** | `app.js?v=1.4.1` changes on every release; JS/CSS served `immutable` so the browser caches forever, but the URL change on upgrade forces an automatic fresh fetch — no hard reloads needed |
+| **Four compiled skins** | Each skin is an independent esbuild bundle; switching skins loads a fresh JS bundle, no shared state |
+| **AGPL-3.0** | Source must remain open if Heimdall is run as a network service |
+
+---
+
 ## Features
 
 ### Alert Feed
@@ -141,49 +218,59 @@ Real-time alert list with severity badges, source/destination IPs, protocol, and
 ### Alert Triage
 Click any alert to open the detail panel:
 - **Status** — mark as `new`, `open`, `closed`, or `false-positive`
-- **Analyst notes** — add timestamped notes visible to your whole team
-- **Activity log** — full history of every status change and note
+- **Analyst notes** — add timestamped notes visible to the whole team
+- **Activity log** — full audit trail of every status change and note
+
+### Bulk Triage
+Select multiple alerts and apply a status or note to all of them in one action. Useful for clearing large volumes of known-benign traffic.
 
 ### Threat Intelligence
-Build a knowledge base per Suricata signature. Each entry supports:
+Build a per-signature knowledge base. Each entry supports:
 - Description and recommended response
 - CVE references
 - MITRE ATT&CK technique mapping
 - Analyst notes
+- Import/export via `.htf` (Heimdall Threat Feed) text format with overwrite support
 
-The **Gaps** view lists the top signatures firing without any intel entry, so you know where to focus documentation effort.
+The **Gaps** view lists the top signatures currently firing without any intel entry.
 
 ### Suppression Rules
-Create rules to drop noisy signatures from the live feed. Suppression is applied in the ingestion layer — suppressed events are never written to the database.
+Create rules to drop noisy or known-safe signatures at the ingestion layer. Suppressed alerts never reach the database or the SSE stream — they consume no storage and generate no UI noise.
+
+### Eve.json Replay
+If Heimdall was offline while Suricata kept running, the **Replay** button re-reads `eve.json` from the beginning and fills any gaps in the database. Runs in the background; the dashboard stays fully usable during replay.
 
 ### Analytics
-- Alert volume timeseries chart
-- Top-10 firing signatures
-- Top-10 source IP addresses
+- Alert volume timeseries chart (24h / 7d / 30d / 60d / 90d windows)
+- By-severity breakdown bar chart
+- Top source IP addresses
+- Alert category donut chart
 
-### Multi-user Access
-Create analyst and viewer accounts from the Users panel. Roles are enforced at the API level on every request.
+### Multi-User Access
 
-| Role | Can Do |
-|------|--------|
-| **Admin** | Everything — users, settings, webhooks, AI config, suppression |
+| Role | Permissions |
+|------|-------------|
+| **Admin** | Everything — users, webhooks, settings, AI config, suppression, flush/replay |
 | **Analyst** | Alert triage, threat intel create/edit, suppression create/edit |
 | **Viewer** | Read-only access to all views |
+
+### Data Management
+Per-table **Clear All** buttons let admins flush alerts, flows, or DNS records independently. After a flush, **Replay** can restore alert history from `eve.json`.
 
 ---
 
 ## Skins
 
-Switch between skins at any time from the Settings panel without restarting.
+Switch between skins at any time from the Settings panel or the skin switcher widget in the bottom-right corner. No restart required.
 
-| Skin | Description |
-|------|-------------|
-| **Original** | Classic dark list view with slide-out detail panel. Highest information density. |
-| **Chronicles** | Heatmap strip across the top, vertical timeline on the left, detail panel on the right. |
-| **Mosaic** | Card-grid layout. Each alert is a colour-coded card. Best on large monitors. |
-| **Seal** | Compact monochrome design. Minimal chrome. Best for focused analysis sessions. |
+| Skin | Style | Best For |
+|------|-------|----------|
+| **Original** | Warm charcoal, Space Grotesk | High information density, classic list view |
+| **Chronicles** | Obsidian violet, Inter | Timeline-focused analysis, heatmap header |
+| **Mosaic** | Glass indigo, Inter | Card-grid layout, large monitors |
+| **Seal** | Navy steel, Space Mono | Minimal monochrome, focused analysis sessions |
 
-All skins share the same full feature set, the same bundled fonts (Inter + JetBrains Mono), and the same React version. No skin makes any external network requests.
+All skins share the same full feature set, bundled fonts (Inter + JetBrains Mono), and the same React runtime. No skin makes any external network requests.
 
 ---
 
@@ -197,58 +284,58 @@ Heimdall can automatically generate a short, actionable executive summary for ev
 2. Choose your provider and paste your API key
 3. Toggle **AI Explanation** on
 
-### How it works
+### How It Works
 
 - Every new alert arriving via SSE is automatically submitted to the AI provider in the background
-- The summary is cached — by the time you open the Explain dialog, it's already ready
+- The summary is cached per alert — by the time you open the Explain dialog, it is ready
 - Open any alert → click **Explain** → open the **AI Summary** tab
-- Use the **Refresh** button to regenerate if needed
+- Use **Refresh** to regenerate if needed
 
 ### Providers
 
 | Provider | Model | Notes |
 |----------|-------|-------|
 | OpenAI | `gpt-4o-mini` | Default. Low cost, ~1–2s latency. |
-| Anthropic | `claude-3-5-haiku-20241022` | Consistent output. ~1–2s latency. |
+| Anthropic | `claude-3-5-haiku-20241022` | Consistent structured output. ~1–2s latency. |
 | DeepSeek | `deepseek-chat` | Very low cost. ~2–4s latency. |
 
 ### API Key Storage
 
 API keys are stored in the config database with XOR obfuscation and are **never** returned to the browser. The UI only shows whether a key has been set. Keys can also be set in `heimdall.conf` — the UI setting takes precedence.
 
-### Disabling AI
-
-When disabled: no API calls are made, no AI tab appears in the Explain dialog, and there is zero performance impact. Toggle it off at any time from the AI Explain settings panel.
-
 ---
 
 ## Webhooks
 
-Send alert notifications to external tools.
+Push alert notifications to external tools whenever a matching alert arrives.
 
-### Supported types
-- **Slack** — formatted with severity colour and alert metadata
-- **Discord** — same format, Discord-compatible payload
-- **Generic** — raw JSON POST to any HTTP endpoint
+### Supported Types
+- **Slack** — Block Kit formatted, severity-coloured
+- **Discord** — Embed formatted
+- **Generic** — Raw JSON POST (works with n8n, Mattermost, Teams, Home Assistant, etc.)
 
-### Creating a webhook
+### Creating a Webhook
 
 Go to **Settings → Webhooks → Add Webhook**. Configure:
 - **Name** — label for the webhook card
 - **Type** — Slack, Discord, or Generic
 - **URL** — destination endpoint
 - **Severity filter** — only fire for selected severity levels
-- **Allow local / private URLs** — enable this for LAN-hosted tools like **n8n**, Home Assistant, or Mattermost
+- **Allow local / private URLs** — enable for LAN-hosted tools like n8n
 
-> **n8n users:** Enable the "Allow local / private URLs" toggle on any webhook pointing to your n8n instance. By default, Heimdall blocks webhook destinations that resolve to private IP ranges (RFC-1918) to prevent SSRF attacks. This toggle explicitly permits them on a per-webhook basis.
+> **n8n / LAN tools:** Enable "Allow local / private URLs" for any webhook pointing to a private-IP destination. By default Heimdall blocks RFC-1918 and loopback addresses to prevent SSRF. This toggle opts that webhook in explicitly. A yellow **local** badge appears on the card as a reminder.
 
-A yellow **local** badge appears on the webhook card when this is enabled, so it's always visible.
+### Behaviour
+- Deliveries are queued and processed in a background thread — they never block alert ingestion
+- Failed deliveries are retried up to 3 times with a 5-second delay between attempts
+- Per-signature deduplication: the same SID will not fire the same webhook more than once per 60 seconds during burst events (scans, floods)
+- Fire count and last-fired time update on the webhook card in real time
 
 ---
 
 ## Security
 
-### What's in place
+### Protections in Place
 
 | Protection | Implementation |
 |------------|----------------|
@@ -257,191 +344,151 @@ A yellow **local** badge appears on the webhook card when this is enabled, so it
 | MIME sniffing | `X-Content-Type-Options: nosniff` on every response |
 | Content Security Policy | `default-src 'self'` — no CDN, no eval, no external scripts |
 | Referrer leakage | `Referrer-Policy: no-referrer` on every response |
+| CSRF defence | `SameSite=Strict` session cookie + Origin/Referer header validation on all write requests |
 | Source code exposure | `.jsx` and `.py` files return HTTP 403 from the static handler |
-| Webhook SSRF | Private/loopback IP destinations blocked by default |
+| Webhook SSRF | RFC-1918/loopback destinations blocked by default; opt-in per webhook |
 | API key storage | XOR-obfuscated in DB; never returned to browser |
 | SQL injection | Parameterised queries throughout; no string interpolation into SQL |
-| Session security | bcrypt passwords; indexed sessions with expiry |
+| Session security | PBKDF2-SHA256 passwords (260,000 iterations); indexed sessions with 7-day expiry |
+| Body size limits | Request bodies capped at 4 MB; bulk alert operations capped at 500 IDs |
 
-### Known gaps
+### Known Gaps
 
 - **No TLS** — Heimdall listens on plain HTTP. For any network-exposed deployment, place behind nginx, Caddy, or use Tailscale.
-- **No CSRF tokens** — acceptable for a localhost-first tool; add if exposing on a shared network.
 - **No admin audit log** — user creation and role changes are not currently written to a dedicated audit trail.
 
 ---
 
 ## Building from Source
 
-**Requirements:** `esbuild`, `dpkg-deb`
+**Requirements:** `esbuild` (`npm install -g esbuild`), `dpkg-deb`
 
 ```bash
-# Clone or extract the source
-cd heimdall-github/
-
-# Build current default version
+# Build default version (1.4)
 bash build-deb.sh
 
 # Build a specific version
-bash build-deb.sh 1.0
+bash build-deb.sh 1.5
 
 # Output
-# packaging/build/heimdall-ids_0.5_all.deb
+# packaging/build/heimdall-ids_1.4_all.deb
+# packaging/build/heimdall-ids-noai_1.4_all.deb
 ```
 
 The build script:
-1. Compiles all four skin `app.jsx` files to minified `app.js` via esbuild
-2. Assembles the Debian package tree under `packaging/build/`
-3. Copies backend Python modules, compiled frontend assets, and bundled fonts
+1. Compiles all four skin `app.jsx` files to minified JS via esbuild (`app.js`)
+2. Assembles the Debian package tree, copies backend Python, frontend assets, and bundled fonts
+3. Substitutes `__HEIMDALL_VERSION__` with the actual version string in `index.html` and `skin-loader.js`, baking `?v=VERSION` into every asset URL
 4. Runs `dpkg-deb` to produce the `.deb`
+5. Repeats steps 1–4 for the AI-free `noai` variant via `strip-ai.py`
 
-**No npm, no pip, no webpack at runtime.** All build-time tools are separate from the installed package.
+**Asset caching model:** `index.html` is served `no-cache` so the browser always fetches it fresh. All JS, CSS, and fonts are served `immutable` with `?v=VERSION` appended to their URLs. When a new version is installed, the URL changes and the browser automatically fetches the updated files — no hard reload or cache clearing needed. **Always increment the version on every build** (`bash build-deb.sh 1.4.1`, `bash build-deb.sh 1.4.2`, etc.) — that is the only discipline required.
 
 ---
 
 ## Changelog
 
+### v1.4 — May 2026
+
+**Versioned asset URLs — automatic cache invalidation on upgrade:**
+- `build-deb.sh` substitutes `__HEIMDALL_VERSION__` with the build version at package time, baking `?v=1.4` into every asset URL in `index.html` and `skin-loader.js`
+- `skin-loader.js` loads `styles.css?v=VERSION` and `app.js?v=VERSION` for the active skin
+- `index.html` is served `no-cache`; all JS, CSS, and fonts are served `immutable`
+- When a new version is installed, every asset URL changes — the browser automatically fetches fresh files on the next normal page load, no hard reload required
+- **Rule:** increment the version on every build (`bash build-deb.sh 1.4.1`) — that is the only discipline needed for cache correctness
+
+**Webhook fire count now updates in real time:**
+- `testWebhook()` in all four skins now calls `loadWebhooks()` immediately after the test completes, so fire count and last-fired time update on the card without a page reload
+- A 30-second `setInterval` poll on `loadWebhooks` was added to all skins' Settings `useEffect`, keeping counts current as live alerts trigger webhook deliveries
+
+**Webhook Test button now respects `allow_local`:**
+- `_webhook_test` in `handlers.py` was calling `deliver(url, payload)` without passing `allow_local`, so the Test button always blocked private-IP webhooks regardless of the toggle. Fixed — now passes `allow_local=wh.get("allow_local", False)`
+
+**Mosaic and Seal webhook card styling:**
+- Both skins had only `.wh-settings-card` defined in their CSS — all inner elements (`.wh-top`, `.wh-name`, `.wh-toggle`, `.wh-url`, severity pills, `.wh-meta`, `.wh-actions`, `.wh-error`) were completely unstyled. Added all missing classes to both skins.
+
+**Replay and Flush panels visible across all skins:**
+- `ReplayFlushPanel` was using inline styles referencing CSS variables (`var(--s1)`, `var(--ln)`) that resolve differently across themes, making the panel invisible in some theme/skin combinations. Replaced inline styles with `.settings-card` / `.settings-card-header` / `.settings-card-body` / `.settings-card-title` class names — consistent with every other settings card in all four skins.
+
+**Suppression rules now enforced (critical fix):**
+- `tail_thread()` did not receive `sup_db` as a parameter and never called `sup_db.is_suppressed()`. Every alert passed through unconditionally regardless of configured suppression rules. Fixed: `tail_thread` now accepts `sup_db=None` and checks suppression before every insert and broadcast. `server.py` passes `sup_db` via `kwargs`.
+
+**`purge_old()` orphan cascade (critical fix):**
+- The hourly purge deleted rows from `alerts`, `flows`, and `http_events` but left all `alert_notes`, `alert_activity`, and `alert_meta` rows for those alerts as orphans. On a busy sensor these tables grew without bound. Fixed: metadata tables are now purged first (before the parent rows are deleted) using a `WHERE alert_id NOT IN (SELECT id FROM alerts WHERE ts_epoch>=?)` subquery.
+
+**Immutable asset cache-busting (high fix):**
+- All skin JS and CSS was served with `Cache-Control: immutable` but with static filenames (`app.js`, `styles.css`) and no version in the URL. After a deb upgrade, browsers would serve the old cached files for up to a year. Fixed: `?v=VERSION` is now baked into every asset URL at build time; upgrading to a new version automatically changes the URLs and forces a fresh fetch.
+
+**`count_alerts()` cache keyed by days (high fix):**
+- The count cache stored a single integer. If two requests used different `days` windows within the 5-second TTL, the second got the first's stale count, returning a wrong `total` in paginated alert responses. Fixed: cache is now a `dict` keyed by the `days` integer; `invalidate_count_cache()` clears all keys.
+
+**Alert ID collision fix (high fix):**
+- Alert IDs were composed as `f"{flow_id}-{sig_id}-{ts}"`. When `flow_id=0` (common for non-flow alerts) and the same signature fired from two different source IPs in the same second, both produced the same ID — the second was silently dropped by `INSERT OR IGNORE`. Fixed: `src_ip` is now included in the composite key.
+
+**Mosaic Data Management alignment fix:**
+- Mosaic's Settings JSX used `data-mgmt-row` / `data-mgmt-label` / `data-mgmt-sub` class names while its own CSS defined `data-action-row` / `data-action-info` / `data-action-sub`. The Clear All buttons rendered below the record count instead of on the right. Fixed via `sed` rename.
+
+**Raw `.jsx` source removed from installed packages:**
+- `build-deb.sh` was copying `app.jsx` source files into both deb packages alongside the compiled `app.js`. The server correctly refused to serve them but they were dead weight (~550 KB). Removed.
+
+---
+
+### v1.3 — May 2026
+
+- Overwrite toggle in Threat Intel import redesigned as an animated pill switch
+- Webhook per-SID cooldown deduplication: one notification per (webhook, SID) per 60-second window during burst events
+- `import_htf` overwrite sentinel bug fixed (duplicate SIDs in same batch could overwrite twice)
+
 ### v1.2 — May 2026
 
-**Threat Intel import improvements and Clear All button:**
-
-- **Feature:** HTF import now supports an **Overwrite** mode. When the checkbox is ticked before importing, existing entries whose `sig_id` or `category` matches an entry in the file are updated in-place instead of skipped. The import result banner reports `imported`, `overwritten`, and `skipped` counts separately.
-- **Feature:** A **Clear All** button (admin only) appears in the Threat Intel action bar whenever entries exist. It requires a single inline confirmation click before deleting all entries via `DELETE /threat-intel`. Present in all four skins.
-- **Backend:** `ThreatIntelDB.import_htf()` accepts an `overwrite: bool` parameter. `existing_sids` and `existing_cats` are now `{key: id}` dicts (not sets) so the matched row ID is available for `update()` calls.
-- **Backend:** New `ThreatIntelDB.clear_all()` method — single `DELETE FROM threat_intel`, returns deleted row count.
-- **Backend:** New `DELETE /threat-intel` route (admin-only) wired to `clear_all()`.
+- HTF import **Overwrite** mode — existing entries updated in-place instead of skipped; result banner shows imported/overwritten/skipped counts
+- **Clear All** button in Threat Intel action bar (admin only, inline confirmation)
+- `ThreatIntelDB.clear_all()` and `DELETE /threat-intel` route
 
 ### v1.1 — May 2026
 
-**Security hardening, performance improvements, and code quality fixes:**
-
-- **Security (high):** `_read_json()` had no body-size limit — a request with `Content-Length: 100000000` would attempt to read 100 MB into memory. Added `_MAX_BODY = 4 MB` hard cap; returns HTTP 413 if exceeded.
-- **Security (medium):** `_json()` (used for all small API replies and error responses) was missing security headers (`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Cache-Control: no-store`). All JSON responses now carry the full header set.
-- **Security (medium):** Added CSRF Origin/Referer validation on all state-changing requests (POST/PUT/DELETE). Requests with a mismatched `Origin` header are rejected with HTTP 403. `SameSite=Strict` on the session cookie remains the primary CSRF control; Origin checking is defence-in-depth.
-- **Security (medium):** `_bulk_alert_status()` had no cap on the `alert_ids` list size. An analyst could send tens of thousands of IDs, generating a massive `IN (...)` SQL clause. Added `_MAX_BULK_IDS = 500` cap, matching `delete-selected`.
-- **Security (low):** Added field-length limits: usernames ≤ 64 chars, passwords ≤ 256 chars, alert notes ≤ 4000 chars, webhook URLs ≤ 2048 chars, HTF import content ≤ 4 MB.
-- **Security (low):** Fixed misleading comment in `ai_explain._derive_mask()` that claimed the mask was "machine-path keyed" when it was actually static. Comment now accurately describes the mild obfuscation.
-- **Performance:** `DedupFilter.is_duplicate()` used an O(n) linear scan over a deque of up to 10,000 entries. Replaced with a parallel `set` for O(1) membership tests; deque retained for ordered expiry eviction.
-- **Performance:** Static assets (compiled JS, CSS, fonts) now served with `Cache-Control: public, max-age=31536000, immutable` instead of `no-cache`. These files are content-stable between deploys, so browser caching dramatically reduces repeated-visit load.
-- **Bug:** `User-Agent` header in webhook deliveries still read `Heimdall-IDS/0.9`. Updated to `1.1`.
-- **Code quality:** Module docstrings in `threat_intel.py` and `suppression.py` said "Watcher IDS Dashboard" (a legacy project name). Corrected to "Heimdall IDS Dashboard". Logger names (`watcher.threat_intel`, `watcher.suppression`) updated to match.
-- **Code quality:** Dead variable `font_exts` in `_serve_static()` removed (was defined but never used — remnant of an incomplete feature).
+- Request body size cap: 4 MB hard limit, HTTP 413 if exceeded
+- Security headers on all JSON responses
+- CSRF Origin/Referer validation on all state-changing requests
+- Bulk alert status capped at 500 IDs
+- Field length limits: usernames ≤ 64, passwords ≤ 256, notes ≤ 4000, webhook URLs ≤ 2048
+- `DedupFilter` O(n) → O(1) with parallel set
+- Compiled JS/CSS/fonts switched to `Cache-Control: immutable`
 
 ### v1.0 — May 2026
 
-**Seven bugs fixed — Threat Intel and Suppression fully operational:**
-
-- **Bug (critical):** `_read_json()` returns a `(data, err)` tuple. `_ti_create`, `_ti_update`, `_sup_create`, and `_sup_update` were all calling it as `body = self._read_json()` instead of `body, err = self._read_json()`. Every call to these endpoints crashed with `AttributeError: 'tuple' object has no attribute 'get'`, surfacing as a generic "Network error" in the frontend.
-- **Bug:** `_import_htf()` was called in `do_POST` for `POST /threat-intel/import` but was never implemented in `handlers.py`. Any .htf import attempt raised `AttributeError` → server 500 → frontend "TypeError: Failed to fetch".
-- **Bug:** `_export_htf()` was similarly called in `do_GET` for `GET /threat-intel/export` but was never implemented. Export was silently broken.
-- **Bug:** `POST /suppression` was not routed in `do_POST`. Creating suppression rules was impossible.
-- **Bug:** `PUT /threat-intel/{id}` was not routed in `do_PUT`. Editing threat intel entries was impossible.
-- **Bug:** `PUT /suppression/{id}` was not routed in `do_PUT`. Editing suppression rules was impossible.
-- **Bug:** `DELETE /threat-intel/{id}` and `DELETE /suppression/{id}` were not routed in `do_DELETE`. Deletion of both was impossible.
-
-**CSS alignment across all four skins:**
-
-- All skins now define `--sans`, `--teal`, and `--accent-rgb` in `:root`, eliminating silent fallback reliance in shared JSX.
-- Chronicles and Mosaic now define `--radius-sm`, `--radius-md`, `--radius-lg` as aliases for their `--r-sm`/`--r-md`/`--r-lg` tokens, matching what Original and Seal already used.
+- `_read_json()` tuple return fix — `_ti_create`, `_ti_update`, `_sup_create`, `_sup_update` all crashed with `AttributeError` on every call
+- `_import_htf()` and `_export_htf()` implemented (were called but never defined)
+- Missing `POST /suppression`, `PUT /threat-intel/{id}`, `PUT /suppression/{id}`, `DELETE` routes added
+- CSS variables `--sans`, `--teal`, `--accent-rgb`, `--radius-sm/md/lg` aligned across all four skins
 
 ### v0.5 — May 2026
-**Critical bug fix: service crash-restart loop on startup**
 
-- **Bug:** `handlers.py` used `threading.Lock()` at module level to initialise `_LOGIN_LOCK` (introduced in the v0.2 security audit), but `import threading` was missing from the file's imports block. Python evaluates module-level statements the instant a file is imported, so `server.py` crashed on its very first `from handlers import Handler` with `NameError: name 'threading' is not defined` — before the HTTP server could start. systemd detected the crash and restarted in a loop.
-- **Fix:** Added `import threading` to the imports block in `handlers.py`.
-- **Verified:** `py_compile` check passes; live `import handlers` confirms `threading.Lock()` initialises correctly as `<unlocked _thread.lock object>`.
-
----
+- `import threading` added to `handlers.py` — server crashed on import with `NameError` before it could start
 
 ### v0.4 — May 2026
-**Bundled web fonts — Inter + JetBrains Mono**
 
-- Fonts are now fully bundled inside the `.deb`. Zero external font requests at runtime.
-- **Inter** (sans-serif): weights 400, 500, 600, 700 — latin subset, woff2 format
-- **JetBrains Mono** (monospace): weights 400, 500, 600 — latin subset, woff2 format
-- Total font payload: **168 KB** across 7 files
-- `frontend/fonts/fonts.css` created with `@font-face` declarations and `font-display: swap`
-- All four skin stylesheets updated to `@import url('../../fonts/fonts.css')`
-- `login.html` updated with `<link rel="stylesheet" href="fonts/fonts.css">`
-- `handlers.py` updated: `woff2/woff/ttf` MIME types added; `font-src 'self'` added to CSP; font files served with long-term cache headers
-- `build-deb.sh` updated to copy `frontend/fonts/` into the package
-- Package size: ~160 KB (v0.3) → ~318 KB (v0.4), difference is entirely the font payload
-
----
+- Inter + JetBrains Mono fonts bundled in the `.deb` (168 KB, 7 woff2 files) — zero external font requests
 
 ### v0.3 — May 2026
-**Webhook SSRF refined — n8n and LAN tools now supported**
 
-The v0.2 blanket private-IP block would have broken any webhook pointing to a locally-hosted tool. Replaced with a per-webhook explicit opt-in:
-
-- **`allow_local` field** added to the `webhooks` table in `config.db`
-- Automatic DB migration for existing installs (`ALTER TABLE webhooks ADD COLUMN allow_local INTEGER NOT NULL DEFAULT 0`)
-- `_ssrf_safe(url, allow_local=False)` — when `allow_local=True`, the private-IP check is bypassed entirely
-- `deliver()` and `delivery_worker()` updated to pass `allow_local` through the call chain
-- **Toggle UI** added to the webhook create/edit form in all four skins — animated switch with status hint text
-- **Yellow `local` badge** shown on webhook cards where `allow_local` is active
-- User-Agent header updated to `Heimdall-IDS/0.3`
-
----
+- `allow_local` per-webhook field for private/LAN destinations (n8n, Mattermost, Home Assistant)
+- Automatic DB migration for existing installs
+- Yellow **local** badge on webhook cards where enabled
 
 ### v0.2 — May 2026
-**AI Explain for all skins + airgap, performance, and security audits**
 
-#### AI Explain — all skins
-- `AIExplainView` settings component added to Original, Mosaic, and Seal (Chronicles had it since v0.1)
-- `AIExplanationPanel` in the Explain dialog for all four skins
-- `aiSettings`, `aiExplanations`, `aiEnabledRef` state and `requestAiExplain()` helper in every skin's `App` component
-- SSE auto-explain on new alerts in all four skins
-- Nav label fix: key-based auto-capitalisation would have produced "Ai-explain"; replaced with an explicit label map in all four nav renderers
-
-#### Airgap audit
-- **Google Fonts removed** — `@import url('https://fonts.googleapis.com/...')` was in all four skin stylesheets and `login.html`, making outbound HTTP requests on every page load
-- Replaced with system font stack: `var(--font-sans)` and `var(--font-mono)` CSS variables
-- **`.jsx` source files blocked** — the static file handler now returns HTTP 403 for `.jsx` and `.py` requests
-
-#### Performance audit
-- SQLite PRAGMA tuning added to `database.py` and `dns_db.py`: `cache_size = -8000` (8 MB), `temp_store = MEMORY`, `mmap_size = 268435456` (256 MB)
-- Missing alert indexes added: `idx_a_sigid` on `alerts(sig_id)`, `idx_a_src` on `alerts(src_ip)`, `idx_a_cat` on `alerts(category)`
-- Session indexes added: `idx_sess_tok` on `sessions(token)`, `idx_sess_exp` on `sessions(expires_at)`
-- PRAGMA tuning added to `auth.py`: WAL mode, `cache_size = -2000`
-- `get_alert_meta` consolidated from 3 separate `_conn()` calls to 1 shared connection per request
-
-#### Security audit
-- Security headers on every HTTP response: `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, full `Content-Security-Policy`
-- Login rate limiting: 10 failures per IP per 5-minute window → HTTP 429 + 2-second delay; resets on successful login
-- AI API key obfuscation: stored as `obf1:<base64(XOR(key, sha256_mask))>` in config DB; never returned to frontend
-- Webhook SSRF protection: `_ssrf_safe()` blocks RFC-1918 and loopback destinations by default
-- Per-webhook `allow_local` flag for explicit LAN tool opt-in
-
----
+- AI Explain added to Original, Mosaic, Seal (Chronicles had it since v0.1)
+- Google Fonts removed — replaced with system font stack, then bundled in v0.4
+- `.jsx` and `.py` static serving blocked (HTTP 403)
+- SQLite PRAGMA tuning, missing alert indexes, session indexes
+- Security headers, login rate limiting, AI key obfuscation, webhook SSRF protection
 
 ### v0.1 — May 2026
-**Initial release**
 
-#### Bug fix
-- **Chronicles "Explain" button** was broken. `showExplain`/`explainAlert` state lived at the `App` level but the `ExplainDialog` was never rendered there. Fixed by moving both state variables into `ChronicleView` where the dialog now correctly lives, renders, and closes.
-
-#### AI Explanation system (new module: `ai_explain.py`)
-- Uses Python stdlib `urllib` only — no third-party packages, fully airgap-safe
-- Supports OpenAI (`gpt-4o-mini`), Anthropic (`claude-3-5-haiku-20241022`), DeepSeek (`deepseek-chat`)
-- Executive prompt: 3–5 sentence summary — what triggered the alert, likely threat type, recommended action
-- Auto-explain on every new SSE alert when enabled
-- API key stored in `config.db` (XOR-obfuscated); UI setting takes precedence over `heimdall.conf`
-
-#### New API endpoints
-- `GET /ai-config` — returns `{provider, enabled, api_key_set}`. Never returns the raw key.
-- `PUT /ai-config` — admin-only; update provider, API key, enabled toggle
-- `POST /ai-explain` — accepts alert JSON body, returns `{explanation: "..."}` string
-
-#### New UI (Chronicles skin)
-- **AI Explain** nav tab with full settings panel (provider selector, API key field, enable/disable toggle)
-- **AI Summary** tab inside the Explain dialog alongside Threat Intel
-- `AIExplanationPanel` component: spinner while loading, summary text when ready, error state, Refresh button
-
-#### Other changes
-- **Install-time password display** — `postinst` generates a random password, prints it in a bordered box to the terminal, saves to `/etc/heimdall/.credentials` (mode 640, root:heimdall)
-- **License changed** from MIT to GNU AGPL v3.0
-- **Versioning** started at v0.1; `build-deb.sh` updated accordingly
+- Initial release: AI Explain system (`ai_explain.py`), Chronicles skin AI UI, `GET/PUT /ai-config`, `POST /ai-explain`
+- Install-time credential generation and display
+- License changed to GNU AGPL v3.0
 
 ---
 

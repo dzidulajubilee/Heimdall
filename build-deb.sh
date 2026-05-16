@@ -20,63 +20,25 @@ if ! command -v esbuild >/dev/null 2>&1; then
   echo "ERROR: esbuild not found. Install with: npm install -g esbuild"; exit 1
 fi
 
-# ── 2. Compile all skins with content-hash filenames ─────────────────────────
+# ── 2. Compile all skins ──────────────────────────────────────────────────────
 echo "▶  Compiling skins…"
 FLAGS="--bundle --minify --jsx-factory=React.createElement --jsx-fragment=React.Fragment"
 
 compile_skins() {
-  local SRC_ROOT="$1"   # root of source tree (frontend/skins/*)
-  local OUT_ROOT="$2"   # where compiled files land (same dir as source for now)
-
-  # Build a JSON manifest as we go
-  local MANIFEST="{"
-  local FIRST=1
+  local SRC_ROOT="$1"
 
   for skin in original chronicles mosaic seal; do
     src="${SRC_ROOT}/frontend/skins/${skin}/app.jsx"
-    skin_out_dir="${SRC_ROOT}/frontend/skins/${skin}"
-
-    # Remove old hashed builds so stale files don't accumulate
-    rm -f "${skin_out_dir}"/app-*.js
-
+    out="${SRC_ROOT}/frontend/skins/${skin}/app.js"
     printf "    %-12s " "$skin"
-
-    # esbuild writes app-{hash}.js when --entry-names contains [hash]
     esbuild "$src" $FLAGS \
-      --entry-names="[name]-[hash]" \
-      --outdir="${skin_out_dir}" \
-      --external:react --external:react-dom 2>/dev/null
-
-    js_file=$(ls "${skin_out_dir}"/app-*.js 2>/dev/null | head -1 | xargs -r basename)
-    if [ -z "$js_file" ]; then
-      echo "ERROR: esbuild produced no output for skin $skin"; exit 1
-    fi
-
-    # Hash the CSS with md5sum (first 8 hex chars)
-    css_src="${SRC_ROOT}/frontend/skins/${skin}/styles.css"
-    css_hash=$(md5sum "$css_src" | cut -c1-8)
-    css_file="styles-${css_hash}.css"
-
-    # Remove old hashed CSS so stale files don't accumulate
-    rm -f "${skin_out_dir}"/styles-*.css
-    cp "$css_src" "${skin_out_dir}/${css_file}"
-
-    printf "%s KB  js=%s  css=%s\n" \
-      "$(du -k "${skin_out_dir}/${js_file}" | cut -f1)" \
-      "$js_file" "$css_file"
-
-    # Accumulate manifest JSON
-    [ $FIRST -eq 0 ] && MANIFEST="${MANIFEST},"
-    MANIFEST="${MANIFEST}\"${skin}\":{\"js\":\"${js_file}\",\"css\":\"${css_file}\"}"
-    FIRST=0
+      --outfile="$out" \
+      --external:react --external:react-dom
+    printf "%s KB\n" "$(du -k "$out" | cut -f1)"
   done
-
-  MANIFEST="${MANIFEST}}"
-  # Write manifest to the frontend dir so it can be copied into the deb
-  echo "$MANIFEST" > "${SRC_ROOT}/frontend/manifest.json"
 }
 
-compile_skins "${ROOT}" "${ROOT}"
+compile_skins "${ROOT}"
 
 # ── 3. Create package tree ────────────────────────────────────────────────────
 rm -rf "${BUILD}"
@@ -140,19 +102,19 @@ PYEOF
 # ── 6. Frontend ───────────────────────────────────────────────────────────────
 cp "${ROOT}/frontend/react.min.js"    "${BUILD}/opt/heimdall/frontend/"
 cp "${ROOT}/frontend/react-dom.min.js" "${BUILD}/opt/heimdall/frontend/"
-cp "${ROOT}/frontend/index.html"      "${BUILD}/opt/heimdall/frontend/"
+sed "s/__HEIMDALL_VERSION__/${VERSION}/g" \
+    "${ROOT}/frontend/index.html" > "${BUILD}/opt/heimdall/frontend/index.html"
 cp "${ROOT}/frontend/login.html"      "${BUILD}/opt/heimdall/frontend/"
 cp "${ROOT}/frontend/login.js"        "${BUILD}/opt/heimdall/frontend/"
-cp "${ROOT}/frontend/skin-loader.js"  "${BUILD}/opt/heimdall/frontend/"
-cp "${ROOT}/frontend/manifest.json"   "${BUILD}/opt/heimdall/frontend/"
+sed "s/__HEIMDALL_VERSION__/${VERSION}/g" \
+    "${ROOT}/frontend/skin-loader.js" > "${BUILD}/opt/heimdall/frontend/skin-loader.js"
 mkdir -p "${BUILD}/opt/heimdall/frontend/fonts"
 cp "${ROOT}/frontend/fonts/"*.woff2   "${BUILD}/opt/heimdall/frontend/fonts/"
 cp "${ROOT}/frontend/fonts/fonts.css" "${BUILD}/opt/heimdall/frontend/fonts/"
 
 for skin in original chronicles mosaic seal; do
-  # Copy the hashed JS and CSS into the deb (plain styles.css is not needed)
-  cp "${ROOT}/frontend/skins/${skin}"/app-*.js      "${BUILD}/opt/heimdall/frontend/skins/${skin}/"
-  cp "${ROOT}/frontend/skins/${skin}"/styles-*.css  "${BUILD}/opt/heimdall/frontend/skins/${skin}/"
+  cp "${ROOT}/frontend/skins/${skin}/app.js"     "${BUILD}/opt/heimdall/frontend/skins/${skin}/"
+  cp "${ROOT}/frontend/skins/${skin}/styles.css" "${BUILD}/opt/heimdall/frontend/skins/${skin}/"
 done
 
 # ── 7. systemd + config ───────────────────────────────────────────────────────
@@ -203,7 +165,7 @@ python3 "${ROOT}/strip-ai.py" "${ROOT}" "${NOAI_DIR}"
 
 # Compile AI-free skins with content-hash filenames
 echo "▶  Compiling AI-free skins…"
-compile_skins "${NOAI_DIR}" "${NOAI_DIR}"
+compile_skins "${NOAI_DIR}"
 
 NOAI_PKG="heimdall-ids-noai_${VERSION}_all"
 NOAI_BUILD="${ROOT}/packaging/build/${NOAI_PKG}"
@@ -264,18 +226,19 @@ PYEOF
 
 cp "${NOAI_DIR}/frontend/react.min.js"    "${NOAI_BUILD}/opt/heimdall/frontend/"
 cp "${NOAI_DIR}/frontend/react-dom.min.js" "${NOAI_BUILD}/opt/heimdall/frontend/"
-cp "${NOAI_DIR}/frontend/index.html"      "${NOAI_BUILD}/opt/heimdall/frontend/"
+sed "s/__HEIMDALL_VERSION__/${VERSION}/g" \
+    "${NOAI_DIR}/frontend/index.html" > "${NOAI_BUILD}/opt/heimdall/frontend/index.html"
 cp "${NOAI_DIR}/frontend/login.html"      "${NOAI_BUILD}/opt/heimdall/frontend/"
 cp "${NOAI_DIR}/frontend/login.js"        "${NOAI_BUILD}/opt/heimdall/frontend/"
-cp "${NOAI_DIR}/frontend/skin-loader.js"  "${NOAI_BUILD}/opt/heimdall/frontend/"
-cp "${NOAI_DIR}/frontend/manifest.json"   "${NOAI_BUILD}/opt/heimdall/frontend/"
+sed "s/__HEIMDALL_VERSION__/${VERSION}/g" \
+    "${NOAI_DIR}/frontend/skin-loader.js" > "${NOAI_BUILD}/opt/heimdall/frontend/skin-loader.js"
 mkdir -p "${NOAI_BUILD}/opt/heimdall/frontend/fonts"
 cp "${NOAI_DIR}/frontend/fonts/"*.woff2   "${NOAI_BUILD}/opt/heimdall/frontend/fonts/"
 cp "${NOAI_DIR}/frontend/fonts/fonts.css" "${NOAI_BUILD}/opt/heimdall/frontend/fonts/"
 
 for skin in original chronicles mosaic seal; do
-  cp "${NOAI_DIR}/frontend/skins/${skin}"/app-*.js      "${NOAI_BUILD}/opt/heimdall/frontend/skins/${skin}/"
-  cp "${NOAI_DIR}/frontend/skins/${skin}"/styles-*.css  "${NOAI_BUILD}/opt/heimdall/frontend/skins/${skin}/"
+  cp "${NOAI_DIR}/frontend/skins/${skin}/app.js"      "${NOAI_BUILD}/opt/heimdall/frontend/skins/${skin}/"
+  cp "${NOAI_DIR}/frontend/skins/${skin}/styles.css"  "${NOAI_BUILD}/opt/heimdall/frontend/skins/${skin}/"
 done
 
 cp "${NOAI_DIR}/packaging/heimdall.service" "${NOAI_BUILD}/lib/systemd/system/heimdall.service"

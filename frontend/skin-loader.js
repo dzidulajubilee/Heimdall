@@ -1,16 +1,17 @@
 /**
  * Heimdall IDS — Skin Loader
- * Reads the chosen skin from localStorage, fetches the asset manifest to get
- * content-hashed filenames, then injects CSS + JS for the active skin.
+ * Reads the chosen skin from localStorage, then injects the compiled CSS
+ * and JS for that skin using versioned URLs.
  *
  * Loading order:
- *   index.html → react.min.js → react-dom.min.js → skin-loader.js (no-cache)
- *   skin-loader.js → manifest.json (no-cache) → skins/{id}/app-{hash}.js
- *                                              → skins/{id}/styles-{hash}.css
+ *   index.html (no-cache) → skin-loader.js?v=VERSION (immutable)
+ *   skin-loader.js → skins/{id}/styles.css?v=VERSION (immutable)
+ *                 → skins/{id}/app.js?v=VERSION       (immutable)
  *
- * Because every asset filename contains a content hash the browser can cache
- * them as immutable forever — a changed file automatically gets a new URL.
- * No manual version bumping or hard reloads ever needed.
+ * The ?v=VERSION query string is baked in at build time by build-deb.sh.
+ * When a new version is installed, every URL changes and the browser
+ * automatically fetches fresh assets — no hard reloads, no cache clearing.
+ * Just increment the version number on every build.
  */
 
 (function () {
@@ -54,8 +55,9 @@
     },
   ];
 
-  const STORAGE_KEY = 'heimdall_skin';
-  const DEFAULT_ID  = 'original';
+  const STORAGE_KEY   = 'heimdall_skin';
+  const DEFAULT_ID    = 'original';
+  const ASSET_VERSION = '__HEIMDALL_VERSION__';
 
   /* ── Skin resolution ─────────────────────────────────────────────────── */
   function currentSkinId() {
@@ -67,23 +69,15 @@
     return SKINS.find(s => s.id === id) || SKINS[0];
   }
 
-  /* ── Manifest fetch ──────────────────────────────────────────────────── */
-  async function fetchManifest() {
-    // Always fetch fresh — manifest.json is served no-cache.
-    const r = await fetch('/frontend/manifest.json', { cache: 'no-store' });
-    if (!r.ok) throw new Error('manifest fetch failed: ' + r.status);
-    return r.json();
-  }
-
   /* ── CSS injection ───────────────────────────────────────────────────── */
   function injectCSS(href) {
     return new Promise(resolve => {
       const old = document.getElementById('skin-css');
       if (old) old.remove();
-      const link = document.createElement('link');
-      link.id   = 'skin-css';
-      link.rel  = 'stylesheet';
-      link.href = href;
+      const link  = document.createElement('link');
+      link.id     = 'skin-css';
+      link.rel    = 'stylesheet';
+      link.href   = href;
       link.onload  = resolve;
       link.onerror = resolve; // fail-open so the app still boots
       document.head.appendChild(link);
@@ -95,7 +89,7 @@
     return new Promise((resolve, reject) => {
       const old = document.getElementById('skin-js');
       if (old) old.remove();
-      const s = document.createElement('script');
+      const s   = document.createElement('script');
       s.id      = 'skin-js';
       s.src     = src;
       s.defer   = true;
@@ -189,12 +183,12 @@
 
     const hdr = document.createElement('div');
     Object.assign(hdr.style, {
-      fontSize:     '9px',
-      fontWeight:   '600',
-      letterSpacing:'.1em',
-      textTransform:'uppercase',
-      color:        'rgba(255,255,255,0.28)',
-      padding:      '5px 8px 8px',
+      fontSize:      '9px',
+      fontWeight:    '600',
+      letterSpacing: '.1em',
+      textTransform: 'uppercase',
+      color:         'rgba(255,255,255,0.28)',
+      padding:       '5px 8px 8px',
     });
     hdr.textContent = 'Choose skin';
     panel.appendChild(hdr);
@@ -249,9 +243,9 @@
       const desc = document.createElement('div');
       desc.textContent = skin.desc;
       Object.assign(desc.style, {
-        color:    'rgba(255,255,255,0.25)',
-        fontSize: '10px',
-        marginTop:'1px',
+        color:     'rgba(255,255,255,0.25)',
+        fontSize:  '10px',
+        marginTop: '1px',
       });
 
       txt.appendChild(name);
@@ -270,9 +264,9 @@
         row.addEventListener('click', () => {
           localStorage.setItem(STORAGE_KEY, skin.id);
           fetch('/skin', {
-            method: 'POST',
+            method:  'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ skin: skin.id }),
+            body:    JSON.stringify({ skin: skin.id }),
           }).catch(() => {});
           location.reload();
         });
@@ -284,14 +278,14 @@
     btn.addEventListener('click', e => {
       e.stopPropagation();
       open = !open;
-      panel.style.display = open ? 'block' : 'none';
+      panel.style.display   = open ? 'block' : 'none';
       btn.style.borderColor = open ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.10)';
     });
 
     document.addEventListener('click', e => {
       if (!wrap.contains(e.target)) {
         open = false;
-        panel.style.display = 'none';
+        panel.style.display   = 'none';
         btn.style.borderColor = 'rgba(255,255,255,0.10)';
       }
     });
@@ -307,31 +301,15 @@
   /* ── Bootstrap ────────────────────────────────────────────────────────── */
   async function boot() {
     const skinId = currentSkinId();
+    const base   = `/frontend/skins/${skinId}/`;
 
-    // 1. Fetch the content-hash manifest (always fresh, served no-cache)
-    let manifest;
-    try {
-      manifest = await fetchManifest();
-    } catch (e) {
-      console.error('[heimdall] Could not load manifest.json:', e);
-      return;
-    }
+    // Inject CSS first — page won't flash unstyled when JS mounts
+    await injectCSS(base + 'styles.css?v=' + ASSET_VERSION);
 
-    const skinFiles = manifest[skinId];
-    if (!skinFiles) {
-      console.error('[heimdall] Skin not found in manifest:', skinId);
-      return;
-    }
+    // Inject and run the compiled skin JS (mounts React)
+    await injectJS(base + 'app.js?v=' + ASSET_VERSION);
 
-    const base = `/frontend/skins/${skinId}/`;
-
-    // 2. Inject CSS first — page won't be unstyled when JS mounts
-    await injectCSS(base + skinFiles.css);
-
-    // 3. Inject and run the compiled JS (mounts React)
-    await injectJS(base + skinFiles.js);
-
-    // 4. Mount the skin switcher
+    // Mount the skin switcher widget
     buildSwitcher(skinId);
   }
 
