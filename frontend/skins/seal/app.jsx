@@ -805,11 +805,11 @@ function WebhookModal({ initial, onSave, onClose }) {
 function UserModal({ initial, onSave, onClose }) {
   const editing=Boolean(initial?.id);
   const [username,setUsername]=useState(initial?.username||'');
-  const [password,setPassword]=useState('');
+  const [password,setPassword]=useState('');const [newPw,setNewPw]=useState('');
   const [role,    setRole]    =useState(initial?.role||'analyst');
   async function submit(){
     if(!editing&&(!username.trim()||!password))return;
-    const body=editing?{role}:{username:username.trim(),password,role};
+    const body=editing?{role,...(newPw&&{password:newPw})}:{username:username.trim(),password,role};
     const endpoint=editing?`/users/${initial.id}`:'/users';
     const method=editing?'PUT':'POST';
     const res=await fetch(endpoint,{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
@@ -820,7 +820,9 @@ function UserModal({ initial, onSave, onClose }) {
       <div className="modal">
         <div className="modal-title">{editing?'Edit User':'Add User'}</div>
         <div className="modal-sub">Role controls what the user can see and do.</div>
-        {!editing&&(<>
+        {editing?(
+          <div className="form-group"><label className="form-label">New Password <span style={{fontWeight:400,color:'var(--tx3,#888)',fontSize:'11px'}}>(leave blank to keep current)</span></label><input className="form-input" type="password" value={newPw} onChange={e=>setNewPw(e.target.value)} placeholder="••••••••"/></div>
+        ):(<>
           <div className="form-group"><label className="form-label">Username</label><input className="form-input" value={username} onChange={e=>setUsername(e.target.value)} placeholder="jsmith"/></div>
           <div className="form-group"><label className="form-label">Password</label><input className="form-input" type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="••••••••"/></div>
         </>)}
@@ -1975,7 +1977,7 @@ function AIExplainView({ role }) {
 
   return (
     <div style={{ overflowY:'auto', flex:1 }}>
-      <div style={{ padding:'20px 24px', maxWidth:760 }}>
+      <div style={{ padding:'20px 24px', maxWidth:760, margin:'0 auto' }}>
 
         {/* Banner */}
         <div style={{ marginBottom:20, padding:'12px 16px', fontSize:12, color:'var(--tx2)',
@@ -2277,6 +2279,7 @@ function App() {
     return saved||'night';
   });
   const [dbStats,  setDbStats]  = useState({alerts:0,flows:0,dns:0});
+  const [health,   setHealth]   = useState(null);
   const [role,     setRole]     = useState('viewer');
   const [username, setUsername] = useState('');
   const [connected,setConnected]= useState(false);
@@ -2289,7 +2292,8 @@ function App() {
   useEffect(()=>{
     fetch('/me').then(r=>r.json()).then(d=>{setRole(d.role||'viewer');setUsername(d.username||'');}).catch(()=>{});
     fetch('/alerts?limit=300').then(r=>r.json()).then(d=>{setAlerts(d.alerts||[]);setAlertTotal(d.total||0);alertOffsetRef.current=(d.alerts||[]).length;}).catch(()=>{});
-    fetch('/health').then(r=>r.json()).then(d=>setDbStats({alerts:d.db?.alerts?.total||0,flows:d.db?.flows?.total||0,dns:d.db?.dns?.total||0})).catch(()=>{});
+    fetch('/health').then(r=>r.json()).then(d=>{setHealth(d);setDbStats({alerts:d.db?.alerts?.total||0,flows:d.db?.flows?.total||0,dns:d.db?.dns?.total||0});}).catch(()=>{});
+    fetch('/ai-config').then(r=>r.json()).then(d=>{setAiSettings(d);aiEnabledRef.current=d.enabled;}).catch(()=>{});
   },[]);
 
   useEffect(()=>{
@@ -2317,6 +2321,14 @@ function App() {
     const id=setInterval(()=>{
       setSparkData(prev=>[...prev.slice(1),Math.max(0,prev[prev.length-1]-1+Math.floor(Math.random()*2))]);
     },4000);
+    return ()=>clearInterval(id);
+  },[]);
+
+  // ── Health poll (10 s) ───────────────────────────────────────────
+  useEffect(()=>{
+    const id=setInterval(()=>{
+      fetch('/health').then(r=>r.json()).then(d=>{setHealth(d);setDbStats({alerts:d.db?.alerts?.total||0,flows:d.db?.flows?.total||0,dns:d.db?.dns?.total||0});}).catch(()=>{});
+    },10000);
     return ()=>clearInterval(id);
   },[]);
 
@@ -2450,10 +2462,10 @@ function App() {
       )}
 
       <footer className="statusbar">
-        <div className="status-item"><div className="status-dot" style={{background:'var(--success)'}}/>DATABASE</div>
+        <div className="status-item"><div className="status-dot" style={{background:health?.status==='ok'?'var(--success)':'var(--danger)'}}/>{health?.status==='ok'?'DATABASE':'DB ERROR'}</div>
         <div className="status-item"><div className="status-dot" style={{background:connected?'var(--success)':'var(--sev-medium)'}}/>{connected?'TAIL ACTIVE':'RECONNECTING…'}</div>
         <span className="status-sep">|</span>
-        <div className="status-item">RETAIN 90 DAYS</div>
+        <div className="status-item">RETAIN {(health?.retain_days??90)} DAYS</div>
         {username&&<div className="status-item" style={{color:'var(--tx3)'}}>{username} · {role}</div>}
         <div style={{flex:1}}/>
         <div className="status-item" style={{color:'var(--tx4)'}}>{new Date().toLocaleDateString([],{month:'short',day:'numeric',year:'numeric'})}</div>

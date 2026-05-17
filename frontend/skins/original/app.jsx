@@ -1217,11 +1217,12 @@ function UserModal({ initial, onSave, onClose }) {
   const editing = Boolean(initial?.id);
   const [username, setUsername] = useState(initial?.username || '');
   const [password, setPassword] = useState('');
+  const [newPw,     setNewPw]     = useState('');
   const [role,     setRole]     = useState(initial?.role || 'analyst');
 
   async function submit() {
     if (!editing && (!username.trim() || !password)) return;
-    const body     = editing ? { role } : { username: username.trim(), password, role };
+    const body     = editing ? { role, ...(newPw && { password: newPw }) } : { username: username.trim(), password, role };
     const endpoint = editing ? `/users/${initial.id}` : '/users';
     const method   = editing ? 'PUT' : 'POST';
     const res = await fetch(endpoint, {
@@ -1235,7 +1236,12 @@ function UserModal({ initial, onSave, onClose }) {
       <div className="modal">
         <div className="modal-title">{editing ? 'Edit User' : 'Add User'}</div>
         <div className="modal-sub">Role controls what the user can see and do.</div>
-        {!editing && (
+        {editing ? (
+          <div className="form-group">
+            <label className="form-label">New Password <span style={{fontWeight:400,color:'var(--tx3,#888)',fontSize:'11px'}}>(leave blank to keep current)</span></label>
+            <input className="form-input" type="password" value={newPw} onChange={e => setNewPw(e.target.value)} placeholder="••••••••" />
+          </div>
+        ) : (
           <>
             <div className="form-group">
               <label className="form-label">Username</label>
@@ -1264,9 +1270,8 @@ function UserModal({ initial, onSave, onClose }) {
   );
 }
 
-function SettingsView({ theme, setTheme, role, username, onLogout, onDataFlushed }) {
+function SettingsView({ theme, setTheme, role, username, onLogout, onDataFlushed, health }) {
   const [users,    setUsers]    = useState([]);
-  const [health,   setHealth]   = useState(null);
   const [modal,    setModal]    = useState(null);
   const [whModal,  setWhModal]  = useState(null);
   const [webhooks, setWebhooks] = useState([]);
@@ -1275,10 +1280,9 @@ function SettingsView({ theme, setTheme, role, username, onLogout, onDataFlushed
   const isAdmin = role === 'admin';
 
   async function loadUsers()    { const r = await fetch('/users');    const d = await r.json(); setUsers(d.users || []); }
-  async function loadHealth()   { const r = await fetch('/health');   const d = await r.json(); setHealth(d); }
   async function loadWebhooks() { const r = await fetch('/webhooks'); const d = await r.json(); setWebhooks(d.webhooks || []); }
 
-  useEffect(() => { loadUsers(); loadHealth(); if (isAdmin) loadWebhooks(); }, []);
+  useEffect(() => { loadUsers(); if (isAdmin) loadWebhooks(); }, []);
   useEffect(() => { if (!isAdmin) return; const id = setInterval(loadWebhooks, 30000); return () => clearInterval(id); }, [isAdmin]);
 
   async function toggleUser(u) {
@@ -1303,7 +1307,7 @@ function SettingsView({ theme, setTheme, role, username, onLogout, onDataFlushed
       body: <>This will permanently delete <strong>{count} {label} records</strong>. This action cannot be undone.</>,
       confirmLabel: `Clear ${label}`,
       variant: 'warning',
-      onConfirm: async () => { await fetch(ep, { method: 'DELETE' }); loadHealth(); },
+      onConfirm: async () => { await fetch(ep, { method: 'DELETE' }); onDataFlushed(); },
     });
   }
 
@@ -2519,7 +2523,7 @@ function AIExplainView({ role }) {
 
   return (
     <div style={{ overflowY:'auto', flex:1 }}>
-      <div style={{ padding:'20px 24px', maxWidth:760 }}>
+      <div style={{ padding:'20px 24px', maxWidth:760, margin:'0 auto' }}>
 
         {/* Banner */}
         <div style={{ marginBottom:20, padding:'12px 16px', fontSize:12, color:'var(--tx2)',
@@ -2822,6 +2826,7 @@ function App() {
     return saved || 'night';
   });
   const [dbStats,    setDbStats]    = useState({ alerts: 0, flows: 0, dns: 0 });
+  const [health,     setHealth]     = useState(null);
   const [role,       setRole]       = useState('viewer');   // loaded from /me
   const [username,   setUsername]   = useState('');
   const [connected,  setConnected]  = useState(false);
@@ -2901,12 +2906,27 @@ function App() {
 
     fetch('/health')
       .then(r => r.json())
-      .then(d => setDbStats({
-        alerts: d.db?.alerts?.total || 0,
-        flows:  d.db?.flows?.total  || 0,
-        dns:    d.db?.dns?.total    || 0,
-      }))
+      .then(d => {
+        setHealth(d);
+        setDbStats({
+          alerts: d.db?.alerts?.total || 0,
+          flows:  d.db?.flows?.total  || 0,
+          dns:    d.db?.dns?.total    || 0,
+        });
+      })
       .catch(() => {});
+  }, []);
+
+  // Poll health every 10s to keep statusbar and settings live
+  useEffect(() => {
+    function pollHealth() {
+      fetch('/health').then(r => r.json()).then(d => {
+        setHealth(d);
+        setDbStats({ alerts: d.db?.alerts?.total||0, flows: d.db?.flows?.total||0, dns: d.db?.dns?.total||0 });
+      }).catch(() => {});
+    }
+    const id = setInterval(pollHealth, 10000);
+    return () => clearInterval(id);
   }, []);
 
   // ── SSE ────────────────────────────────────────────────────────────────────
@@ -3142,6 +3162,7 @@ function App() {
           {view === 'ai-explain' && <AIExplainView role={role}/>}
           {view === 'settings' && <SettingsView theme={theme} setTheme={applyTheme}
                                     role={role} username={username} onLogout={handleLogout}
+                                    health={health}
                                     onDataFlushed={() => { setAlerts([]); setAlertTotal(0); alertOffsetRef.current=0; }} />}
         </div>
 
@@ -3162,14 +3183,15 @@ function App() {
       {/* Status Bar */}
       <footer className="statusbar">
         <div className="status-item">
-          <div className="status-dot" style={{ background: 'var(--success)' }} />Database
+          <div className="status-dot" style={{ background: health?.status === 'ok' ? 'var(--success)' : 'var(--danger)' }} />
+          {health?.status === 'ok' ? 'Database' : 'DB Error'}
         </div>
         <div className="status-item">
           <div className="status-dot" style={{ background: connected ? 'var(--success)' : 'var(--sev-medium)' }} />
           {connected ? 'Tail active' : 'Reconnecting…'}
         </div>
         <span className="status-sep">|</span>
-        <div className="status-item">Retain 90 days</div>
+        <div className="status-item">Retain {health?.retain_days ?? 90} days</div>
         {username && <div className="status-item" style={{ color: 'var(--tx4)' }}>{username} · {role}</div>}
       </footer>
 

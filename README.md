@@ -60,7 +60,7 @@ Heimdall IDS is a lightweight web dashboard that sits on top of [Suricata](https
 ## Installation
 
 ```bash
-sudo apt install ./heimdall-ids_1.4_all.deb
+sudo apt install ./heimdall-ids_1.4.2_all.deb
 ```
 
 That's it. The installer will:
@@ -121,11 +121,14 @@ sudo systemctl restart heimdall
 |--------|---------|-------------|
 | `--eve <path>` | `/var/log/suricata/eve.json` | Path to Suricata `eve.json` |
 | `--port <n>` | `8765` | Listening port |
+| `--host <addr>` | `0.0.0.0` | Bind address |
+| `--db <path>` | `events.db` | Path to events SQLite database |
+| `--config-db <path>` | `config.db` | Path to config SQLite database (auth, sessions, users, webhooks) |
+| `--dns-db <path>` | `dns.db` | Path to DNS SQLite database |
 | `--retain-days <n>` | `90` | Alert and flow retention in days |
-| `--skin <name>` | `original` | Default skin: `original`, `chronicles`, `mosaic`, `seal` |
-| `--ai-provider <name>` | `openai` | AI provider: `openai`, `anthropic`, `deepseek` |
-| `--ai-key <key>` | _(none)_ | API key for AI explanation (UI setting takes precedence) |
-| `--password <pw>` | — | Set or reset the admin password |
+| `--password <pw>` | — | Set or reset the admin password, then exit |
+
+> **AI and skin settings** are configured entirely through the web UI (Settings → AI Explain, skin switcher). There are no CLI flags for them.
 
 **Service management:**
 
@@ -147,45 +150,45 @@ Heimdall is a single self-contained Python process with no external runtime depe
 ┌─────────────────────────────────────────────────────────────────────┐
 │                         Heimdall Process                            │
 │                                                                     │
-│  ┌──────────────┐   ┌──────────────────────────────────────────┐    │
-│  │  tail_thread │   │            HTTP Server                   │    │
-│  │              │   │     (stdlib http.server, port 8765)      │    │
-│  │  Reads and   │   │                                          │    │
-│  │  parses      │──▶│ REST API  │  Static Files  │  SSE /events│    │
-│  │  eve.json    │   └──────────────────────────────────────────┘    │
-│  │  line by     │                      │                            │
-│  │  line        │   ┌──────────────────▼───────────────────────┐    │
-│  │              │   │            SQLite Databases              │    │
-│  │  Applies     │   │                                          │    │
-│  │  suppression │   │  events.db     config.db     dns.db      │    │
-│  │  rules       │   │  ─────────     ─────────     ──────      │    │
-│  │              │   │  alerts        users          dns        │    │
-│  │  Broadcasts  │   │  flows         sessions       queries    │    │
-│  │  to SSE      │   │  http_events   webhooks                  │    │
-│  │              │   │  alert_notes   suppression               │    │
-│  │  Dispatches  │   │  alert_activity threat_intel             │    │
-│  │  webhooks    │   │  alert_meta    ai_cache                  │    │
-│  └──────────────┘   └──────────────────────────────────────────┘    │
+│  ┌──────────────┐   ┌──────────────────────────────────────────┐   │
+│  │  tail_thread │   │            HTTP Server                   │   │
+│  │              │   │     (stdlib http.server, port 8765)      │   │
+│  │  Reads and   │   │                                          │   │
+│  │  parses      │──▶│  REST API  │  Static Files  │  SSE /events│  │
+│  │  eve.json    │   └──────────────────────────────────────────┘   │
+│  │  line by     │                      │                           │
+│  │  line        │   ┌──────────────────▼───────────────────────┐   │
+│  │              │   │            SQLite Databases               │   │
+│  │  Applies     │   │                                          │   │
+│  │  suppression │   │  events.db     config.db     dns.db      │   │
+│  │  rules       │   │  ─────────     ─────────     ──────      │   │
+│  │              │   │  alerts        users          dns         │   │
+│  │  Broadcasts  │   │  flows         sessions       queries     │   │
+│  │  to SSE      │   │  http_events   webhooks                  │   │
+│  │              │   │  alert_notes   suppression               │   │
+│  │  Dispatches  │   │  alert_activity threat_intel             │   │
+│  │  webhooks    │   │  alert_meta    ai_cache                  │   │
+│  └──────────────┘   └──────────────────────────────────────────┘   │
 │                                                                     │
-│  ┌────────────────┐  ┌───────────────┐  ┌──────────────────────┐    │
-│  │ delivery_worker│  │  purge_thread │  │    replay_thread     │    │
-│  │                │  │               │  │                      │    │
-│  │ Drains webhook │  │ Hourly purge  │  │ Re-reads eve.json    │    │
-│  │ delivery queue │  │ of old rows.  │  │ from start to fill   │    │
-│  │ with retries   │  │ Cascades to   │  │ gaps (e.g. after     │    │
-│  │ (max 3)        │  │ notes/activity│  │ downtime). Admin-    │    │
-│  └────────────────┘  └───────────────┘  │ triggered via UI.    │    │
-│                                         └──────────────────────┘    │
+│  ┌────────────────┐  ┌───────────────┐  ┌──────────────────────┐   │
+│  │ delivery_worker│  │  purge_thread │  │    replay_thread     │   │
+│  │                │  │               │  │                      │   │
+│  │ Drains webhook │  │ Hourly purge  │  │ Re-reads eve.json    │   │
+│  │ delivery queue │  │ of old rows.  │  │ from start to fill   │   │
+│  │ with retries   │  │ Cascades to   │  │ gaps (e.g. after     │   │
+│  │ (max 3)        │  │ notes/activity│  │ downtime). Admin-    │   │
+│  └────────────────┘  └───────────────┘  │ triggered via UI.   │   │
+│                                          └──────────────────────┘   │
 └─────────────────────────────────────────────────────────────────────┘
          │ reads                                   │ serves
          ▼                                         ▼
   /var/log/suricata/              Browser (Chrome / Firefox / Safari)
        eve.json
   (Suricata output)           ┌─────────────────────────────────────┐
-                              │ React SPA (no build step at runtime)│
+                              │  React SPA (no build step at runtime)│
                               │                                     │
-                              │skin-loader.js?v=N  → styles.css?v=N │
-                              │                      → app.js?v=N   │
+                              │  skin-loader.js?v=N  → styles.css?v=N  │
+                              │                      → app.js?v=N      │
                               │                  → styles.css?v=N   │
                               │                                     │
                               │  Four skins: original · chronicles  │
@@ -364,15 +367,12 @@ Go to **Settings → Webhooks → Add Webhook**. Configure:
 **Requirements:** `esbuild` (`npm install -g esbuild`), `dpkg-deb`
 
 ```bash
-# Build default version (1.4)
-bash build-deb.sh
-
-# Build a specific version
-bash build-deb.sh 1.5
+# Build with an explicit version string (recommended — required for correct cache-busting)
+bash build-deb.sh 1.4.2
 
 # Output
-# packaging/build/heimdall-ids_1.4_all.deb
-# packaging/build/heimdall-ids-noai_1.4_all.deb
+# packaging/build/heimdall-ids_1.4.2_all.deb
+# packaging/build/heimdall-ids-noai_1.4.2_all.deb
 ```
 
 The build script:
@@ -387,6 +387,23 @@ The build script:
 ---
 
 ## Changelog
+
+### v1.4.2 — May 2026
+
+**Seal skin: SSE auto-explain silently disabled (fix):**
+- The Seal App component never fetched `/ai-config` on startup, so `aiSettings` stayed at its hardcoded default `{enabled: false}` and `aiEnabledRef.current` was always `false`. Every incoming SSE alert skipped the auto-explain call unconditionally, even when AI was fully configured. The AI Explain tab's own settings view worked (it fetches on mount), but the live auto-explain feature was permanently broken. Fixed by adding the `/ai-config` fetch to Seal's init `useEffect`.
+
+**Mosaic and Seal: statusbar counters never refreshed (fix):**
+- Original and Chronicles poll `/health` every 10 seconds so the statusbar (alert/flow/DNS totals, DB health dot, retention figure) stays current. Mosaic and Seal fetched health exactly once on mount and then stopped — counters showed stale values for the entire session. Fixed by adding a 10-second poll `useEffect` to both skins, matching the behaviour of Original and Chronicles.
+
+**Broken skins: `health` state missing from App component (fix):**
+- Chronicles, Mosaic, and Seal all referenced a `health` variable in their statusbar JSX that was never declared as state in the root App component. The variable was `undefined` on every render, causing the statusbar health dot and `retain_days` display to malfunction. Fixed by adding `const [health, setHealth] = useState(null)` to each broken skin's App and wiring it to the `/health` fetch.
+
+**Source `config.py`: wrong `FRONTEND_DIR` for local development (fix):**
+- `FRONTEND_DIR` was set to `Path(__file__).parent / "frontend"`, which resolves to `backend/frontend/` — a path that does not exist. Production is unaffected (build-deb.sh always overwrites `config.py` with the correct hardcoded `/opt/heimdall/frontend`), but any developer running `server.py` directly from the `backend/` directory would get 404s on every page load. Fixed to `Path(__file__).parent.parent / "frontend"`.
+
+**Stale hashed build artifacts removed from source tree:**
+- Eight pre-v1.4 build artifacts (`app-XXXXXX.js`, `styles-XXXXXX.css`) and an unused `manifest.json` that referenced them were committed to the repo. Nothing in the current codebase reads the manifest — `skin-loader.js` uses plain `app.js?v=VERSION`. All nine files deleted; patterns added to `.gitignore` so they cannot reappear.
 
 ### v1.4 — May 2026
 

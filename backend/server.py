@@ -101,7 +101,20 @@ def main():
 
     # Password management mode: set password and exit
     if args.password:
+        # Update the legacy auth table (emergency fallback)
         auth.set_password(args.password)
+        # Also create or update the 'admin' row in the RBAC users table so
+        # the password actually works at login. bootstrap_admin() only fires
+        # when no users exist; for existing installs we call set_password directly.
+        um = UserManager(conn_fn=cfg_db._conn)
+        if um.count() == 0:
+            um.create("admin", args.password, role="admin")
+            log.info("Admin user created with provided password.")
+        else:
+            admin = next((u for u in um.get_all() if u["username"] == "admin"), None)
+            if admin:
+                um.set_password(admin["id"], args.password)
+                log.info("Admin password updated in user table.")
         log.info("Password updated. Restart the server without --password.")
         return
 

@@ -939,10 +939,11 @@ function UserModal({ initial, onSave, onClose }) {
   const editing=Boolean(initial?.id);
   const [username,setUsername]=useState(initial?.username||'');
   const [password,setPassword]=useState('');
+  const [newPw,setNewPw]=useState('');
   const [role,setRole]=useState(initial?.role||'analyst');
   async function submit(){
     if(!editing&&(!username.trim()||!password))return;
-    const body=editing?{role}:{username:username.trim(),password,role};
+    const body=editing?{role,...(newPw&&{password:newPw})}:{username:username.trim(),password,role};
     const res=await fetch(editing?`/users/${initial.id}`:'/users',{method:editing?'PUT':'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     if(res.ok){onSave();onClose();}
   }
@@ -951,7 +952,7 @@ function UserModal({ initial, onSave, onClose }) {
       <div className="modal">
         <div className="modal-title">{editing?'Edit user':'Add user'}</div>
         <div className="modal-sub">Role controls what the user can see and do.</div>
-        {!editing&&(<><div className="form-group"><label className="form-label">Username</label><input className="form-input" value={username} onChange={e=>setUsername(e.target.value)} placeholder="jsmith"/></div><div className="form-group"><label className="form-label">Password</label><input className="form-input" type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="••••••••"/></div></>)}
+        {editing?(<div className="form-group"><label className="form-label">New Password <span style={{fontWeight:400,color:'var(--tx3,#888)',fontSize:'11px'}}>(leave blank to keep current)</span></label><input className="form-input" type="password" value={newPw} onChange={e=>setNewPw(e.target.value)} placeholder="••••••••"/></div>):(<><div className="form-group"><label className="form-label">Username</label><input className="form-input" value={username} onChange={e=>setUsername(e.target.value)} placeholder="jsmith"/></div><div className="form-group"><label className="form-label">Password</label><input className="form-input" type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="••••••••"/></div></>)}
         <div className="form-group"><label className="form-label">Role</label><select className="form-select" value={role} onChange={e=>setRole(e.target.value)}><option value="admin">Admin — full access</option><option value="analyst">Analyst — read + triage, no delete</option><option value="viewer">Viewer — alert stream only</option></select></div>
         <div className="modal-footer">
           <button className="btn-modal" onClick={onClose}>Cancel</button>
@@ -2111,7 +2112,7 @@ function AIExplainView({ role }) {
 
   return (
     <div style={{ overflowY:'auto', flex:1 }}>
-      <div style={{ padding:'20px 24px', maxWidth:760 }}>
+      <div style={{ padding:'20px 24px', maxWidth:760, margin:'0 auto' }}>
 
         {/* Banner */}
         <div style={{ marginBottom:20, padding:'12px 16px', fontSize:12, color:'var(--tx2)',
@@ -2414,6 +2415,7 @@ function App() {
     return s || 'night';
   });
   const [dbStats,   setDbStats]   = useState({ alerts:0, flows:0, dns:0 });
+  const [health,    setHealth]    = useState(null);
   const [role,      setRole]      = useState('viewer');
   const [username,  setUsername]  = useState('');
   const [connected, setConnected] = useState(false);
@@ -2430,7 +2432,7 @@ function App() {
       alertOffsetRef.current=rows.length;
       if(rows.length) setSelectedId(rows[0].id);
     }).catch(()=>{});
-    fetch('/health').then(r=>r.json()).then(d=>setDbStats({alerts:d.db?.alerts?.total||0,flows:d.db?.flows?.total||0,dns:d.db?.dns?.total||0})).catch(()=>{});
+    fetch('/health').then(r=>r.json()).then(d=>{setHealth(d);setDbStats({alerts:d.db?.alerts?.total||0,flows:d.db?.flows?.total||0,dns:d.db?.dns?.total||0});}).catch(()=>{});
     // Load AI settings
     fetch('/ai-config').then(r=>r.json()).then(d=>{
       setAiSettings(d);
@@ -2606,13 +2608,13 @@ function App() {
       </div>
 
       <footer className="statusbar">
-        <div className="sb-item"><div className="sb-dot" style={{background:'var(--success)'}}/>Database</div>
+        <div className="sb-item"><div className="sb-dot" style={{background:health?.status==='ok'?'var(--success)':'var(--danger)'}}/>{health?.status==='ok'?'Database':'DB Error'}</div>
         <div className="sb-item">
           <div className="sb-dot" style={{background:connected?'var(--success)':'var(--sev-medium)'}}/>
           {connected ? 'Tail active' : 'Reconnecting…'}
         </div>
         <span className="sb-sep">|</span>
-        <div className="sb-item">Retain 90 days</div>
+        <div className="sb-item">Retain {health?.retain_days??90} days</div>
         {username && <div className="sb-item" style={{color:'var(--tx3)'}}>{username} · {role}</div>}
       </footer>
 

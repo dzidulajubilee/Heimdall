@@ -344,7 +344,8 @@ class Handler(BaseHTTPRequestHandler):
             s = self.db.stats()
             s["dns"] = {"total": self.dns_db.count(), "recent": self.dns_db.count_recent()}
             self._json({"status": "ok", "clients": self.registry.count(),
-                        "db": s, "time": int(time.time())})
+                        "db": s, "time": int(time.time()),
+                        "retain_days": self.db.retain_days})
         elif p.path == "/skin":
             self._get_skin()
         elif p.path.startswith("/frontend/"):
