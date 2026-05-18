@@ -843,9 +843,8 @@ function UserModal({ initial, onSave, onClose }) {
 }
 
 // ── Settings view ─────────────────────────────────────────────────────────────
-function SettingsView({ theme, setTheme, role, username, onLogout, onDataFlushed }) {
+function SettingsView({ theme, setTheme, role, username, onLogout, onDataFlushed, health }) {
   const [users,   setUsers]   =useState([]);
-  const [health,  setHealth]  =useState(null);
   const [modal,   setModal]   =useState(null);
   const [whModal, setWhModal] =useState(null);
   const [webhooks,setWebhooks]=useState([]);
@@ -855,7 +854,7 @@ function SettingsView({ theme, setTheme, role, username, onLogout, onDataFlushed
   async function loadUsers()   {const r=await fetch('/users');   const d=await r.json();setUsers(d.users||[]);}
   async function loadHealth()  {const r=await fetch('/health');  const d=await r.json();setHealth(d);}
   async function loadWebhooks(){const r=await fetch('/webhooks');const d=await r.json();setWebhooks(d.webhooks||[]);}
-  useEffect(()=>{loadUsers();loadHealth();if(isAdmin)loadWebhooks();},[]);
+  useEffect(()=>{loadUsers();if(isAdmin)loadWebhooks();},[]);
   useEffect(()=>{if(!isAdmin)return;const id=setInterval(loadWebhooks,30000);return()=>clearInterval(id);},[isAdmin]);
   function confirmDeleteUser(u){setConfirm({title:'Delete user',body:`Delete <strong>${u.username}</strong>? This cannot be undone.`,confirmLabel:'Delete user',variant:'danger',onConfirm:async()=>{await fetch(`/users/${u.id}`,{method:'DELETE'});loadUsers();}});}
   function confirmClearData(ep,label,count){setConfirm({title:`Clear all ${label}`,body:`Permanently delete <strong>${count} ${label} records</strong>. Cannot be undone.`,confirmLabel:`Clear ${label}`,variant:'warning',onConfirm:async()=>{await fetch(ep,{method:'DELETE'});loadHealth();}});}
@@ -2295,6 +2294,7 @@ function App() {
     fetch('/health').then(r=>r.json()).then(d=>{setHealth(d);setDbStats({alerts:d.db?.alerts?.total||0,flows:d.db?.flows?.total||0,dns:d.db?.dns?.total||0});}).catch(()=>{});
     fetch('/ai-config').then(r=>r.json()).then(d=>{setAiSettings(d);aiEnabledRef.current=d.enabled;}).catch(()=>{});
   },[]);
+  useEffect(()=>{const id=setInterval(()=>{fetch('/health').then(r=>r.json()).then(d=>{setHealth(d);setDbStats({alerts:d.db?.alerts?.total||0,flows:d.db?.flows?.total||0,dns:d.db?.dns?.total||0});}).catch(()=>{});},10000);return()=>clearInterval(id);},[]);
 
   useEffect(()=>{
     let es;
@@ -2321,14 +2321,6 @@ function App() {
     const id=setInterval(()=>{
       setSparkData(prev=>[...prev.slice(1),Math.max(0,prev[prev.length-1]-1+Math.floor(Math.random()*2))]);
     },4000);
-    return ()=>clearInterval(id);
-  },[]);
-
-  // ── Health poll (10 s) ───────────────────────────────────────────
-  useEffect(()=>{
-    const id=setInterval(()=>{
-      fetch('/health').then(r=>r.json()).then(d=>{setHealth(d);setDbStats({alerts:d.db?.alerts?.total||0,flows:d.db?.flows?.total||0,dns:d.db?.dns?.total||0});}).catch(()=>{});
-    },10000);
     return ()=>clearInterval(id);
   },[]);
 
@@ -2457,7 +2449,7 @@ function App() {
 
           {view==='ai-explain'&&<AIExplainView role={role}/>}
           {view==='settings'&&<SettingsView theme={theme} setTheme={applyTheme} role={role} username={username} onLogout={handleLogout}
-              onDataFlushed={() => { setAlerts([]); setAlertTotal(0); alertOffsetRef.current=0; }}/>}
+              health={health} onDataFlushed={() => { setAlerts([]); setAlertTotal(0); alertOffsetRef.current=0; fetch('/health').then(r=>r.json()).then(d=>{setHealth(d);setDbStats({alerts:d.db?.alerts?.total||0,flows:d.db?.flows?.total||0,dns:d.db?.dns?.total||0});}).catch(()=>{}); }}/>}
         </div>
       )}
 

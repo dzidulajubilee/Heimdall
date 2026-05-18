@@ -26,4 +26,4 @@ SESSION_TTL   = 86400 * 7   # session cookie lifetime (7 days)
 PBKDF2_ITERS  = 260_000     # PBKDF2-SHA256 iteration count
 
 # ── Frontend ──────────────────────────────────────────────────────────────────
-FRONTEND_DIR  = Path(__file__).parent.parent / "frontend"  # project-root/frontend (overridden in deb build)
+FRONTEND_DIR  = Path(__file__).parent.parent / "frontend"  # backend/../frontend

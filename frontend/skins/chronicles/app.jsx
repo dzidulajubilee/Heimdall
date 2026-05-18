@@ -964,9 +964,8 @@ function UserModal({ initial, onSave, onClose }) {
 }
 
 // ── Settings view ─────────────────────────────────────────────────────────────
-function SettingsView({ theme, setTheme, role, username, onLogout, onDataFlushed }) {
+function SettingsView({ theme, setTheme, role, username, onLogout, onDataFlushed, health }) {
   const [users,setUsers]=useState([]);
-  const [health,setHealth]=useState(null);
   const [modal,setModal]=useState(null);
   const [whModal,setWhModal]=useState(null);
   const [webhooks,setWebhooks]=useState([]);
@@ -974,10 +973,8 @@ function SettingsView({ theme, setTheme, role, username, onLogout, onDataFlushed
   const [confirm,setConfirm]=useState(null);
   const isAdmin=role==='admin';
   async function loadUsers(){const r=await fetch('/users');const d=await r.json();setUsers(d.users||[]);}
-  async function loadHealth(){const r=await fetch('/health');const d=await r.json();setHealth(d);}
   async function loadWebhooks(){const r=await fetch('/webhooks');const d=await r.json();setWebhooks(d.webhooks||[]);}
-  useEffect(()=>{loadUsers();loadHealth();if(isAdmin)loadWebhooks();},[]);
-  useEffect(()=>{const id=setInterval(loadHealth,10000);return()=>clearInterval(id);},[]);
+  useEffect(()=>{loadUsers();if(isAdmin)loadWebhooks();},[]);
   useEffect(()=>{if(!isAdmin)return;const id=setInterval(loadWebhooks,30000);return()=>clearInterval(id);},[isAdmin]);
   const [clearMsg,setClearMsg]=useState({});
   const DB_KEY={'/alerts':'alerts','/flows':'flows','/dns':'dns','/http':'http'};
@@ -2439,6 +2436,7 @@ function App() {
       aiEnabledRef.current = d.enabled;
     }).catch(()=>{});
   }, []);
+  useEffect(()=>{const id=setInterval(()=>{fetch('/health').then(r=>r.json()).then(d=>{setHealth(d);setDbStats({alerts:d.db?.alerts?.total||0,flows:d.db?.flows?.total||0,dns:d.db?.dns?.total||0});}).catch(()=>{});},10000);return()=>clearInterval(id);},[]);
 
   useEffect(() => {
     let es;
@@ -2602,7 +2600,7 @@ function App() {
             {view === 'threat-intel' && <ThreatIntelView role={role}/>}
             {view === 'ai-explain'   && <AIExplainView role={role}/>}
             {view === 'settings'  && <SettingsView theme={theme} setTheme={applyTheme} role={role} username={username} onLogout={handleLogout}
-              onDataFlushed={() => { setAlerts([]); setAlertTotal(0); alertOffsetRef.current=0; }}/>}
+              health={health} onDataFlushed={() => { setAlerts([]); setAlertTotal(0); alertOffsetRef.current=0; fetch('/health').then(r=>r.json()).then(d=>{setHealth(d);setDbStats({alerts:d.db?.alerts?.total||0,flows:d.db?.flows?.total||0,dns:d.db?.dns?.total||0});}).catch(()=>{}); }}/>}
           </div>
         )}
       </div>

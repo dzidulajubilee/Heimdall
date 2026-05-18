@@ -463,7 +463,6 @@ class Handler(BaseHTTPRequestHandler):
         ".html":  "text/html; charset=utf-8",
         ".js":    "application/javascript",
         ".json":  "application/json",
-        ".jsx":   "application/javascript",
         ".css":   "text/css",
         ".ico":   "image/x-icon",
         ".png":   "image/png",

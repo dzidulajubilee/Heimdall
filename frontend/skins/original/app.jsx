@@ -2915,6 +2915,10 @@ function App() {
         });
       })
       .catch(() => {});
+    fetch('/ai-config').then(r => r.json()).then(d => {
+      setAiSettings(d);
+      aiEnabledRef.current = d.enabled;
+    }).catch(() => {});
   }, []);
 
   // Poll health every 10s to keep statusbar and settings live
@@ -3163,7 +3167,7 @@ function App() {
           {view === 'settings' && <SettingsView theme={theme} setTheme={applyTheme}
                                     role={role} username={username} onLogout={handleLogout}
                                     health={health}
-                                    onDataFlushed={() => { setAlerts([]); setAlertTotal(0); alertOffsetRef.current=0; }} />}
+                                    onDataFlushed={() => { setAlerts([]); setAlertTotal(0); alertOffsetRef.current=0; fetch('/health').then(r=>r.json()).then(d=>{setHealth(d);setDbStats({alerts:d.db?.alerts?.total||0,flows:d.db?.flows?.total||0,dns:d.db?.dns?.total||0});}).catch(()=>{}); }} />}
         </div>
 
         {view === 'alerts' && (

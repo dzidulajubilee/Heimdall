@@ -121,14 +121,11 @@ sudo systemctl restart heimdall
 |--------|---------|-------------|
 | `--eve <path>` | `/var/log/suricata/eve.json` | Path to Suricata `eve.json` |
 | `--port <n>` | `8765` | Listening port |
-| `--host <addr>` | `0.0.0.0` | Bind address |
-| `--db <path>` | `events.db` | Path to events SQLite database |
-| `--config-db <path>` | `config.db` | Path to config SQLite database (auth, sessions, users, webhooks) |
-| `--dns-db <path>` | `dns.db` | Path to DNS SQLite database |
 | `--retain-days <n>` | `90` | Alert and flow retention in days |
-| `--password <pw>` | — | Set or reset the admin password, then exit |
-
-> **AI and skin settings** are configured entirely through the web UI (Settings → AI Explain, skin switcher). There are no CLI flags for them.
+| `--skin <name>` | `original` | Default skin: `original`, `chronicles`, `mosaic`, `seal` |
+| `--ai-provider <name>` | `openai` | AI provider: `openai`, `anthropic`, `deepseek` |
+| `--ai-key <key>` | _(none)_ | API key for AI explanation (UI setting takes precedence) |
+| `--password <pw>` | — | Set or reset the admin password |
 
 **Service management:**
 
@@ -367,8 +364,11 @@ Go to **Settings → Webhooks → Add Webhook**. Configure:
 **Requirements:** `esbuild` (`npm install -g esbuild`), `dpkg-deb`
 
 ```bash
-# Build with an explicit version string (recommended — required for correct cache-busting)
-bash build-deb.sh 1.4.2
+# Build default version (1.4.2)
+bash build-deb.sh
+
+# Build a specific version
+bash build-deb.sh 1.4.3
 
 # Output
 # packaging/build/heimdall-ids_1.4.2_all.deb
@@ -390,20 +390,44 @@ The build script:
 
 ### v1.4.2 — May 2026
 
-**Seal skin: SSE auto-explain silently disabled (fix):**
-- The Seal App component never fetched `/ai-config` on startup, so `aiSettings` stayed at its hardcoded default `{enabled: false}` and `aiEnabledRef.current` was always `false`. Every incoming SSE alert skipped the auto-explain call unconditionally, even when AI was fully configured. The AI Explain tab's own settings view worked (it fetches on mount), but the live auto-explain feature was permanently broken. Fixed by adding the `/ai-config` fetch to Seal's init `useEffect`.
+**Health state architecture fix (all four skins):**
+- `health` state was only defined inside `SettingsView`, not in the `App` component. The statusbar renders inside `App`, so `health?.status` and `health?.retain_days` resolved to `undefined`, causing a React crash and a blank page on login. Fixed: `health` state is now owned by `App`, fetched on mount, polled every 10 seconds, and passed down to `SettingsView` as a prop.
+- All four skins had the duplicate local `health` state, `loadHealth` function, and `setInterval` removed from `SettingsView` — health is now fetched once at the App level, not twice.
+- `onDataFlushed` callback now triggers an immediate `/health` re-fetch in all four skins, so Server Health stats update instantly after clearing alerts/flows/DNS rather than waiting up to 10 seconds for the next poll.
 
-**Mosaic and Seal: statusbar counters never refreshed (fix):**
-- Original and Chronicles poll `/health` every 10 seconds so the statusbar (alert/flow/DNS totals, DB health dot, retention figure) stays current. Mosaic and Seal fetched health exactly once on mount and then stopped — counters showed stale values for the entire session. Fixed by adding a 10-second poll `useEffect` to both skins, matching the behaviour of Original and Chronicles.
+**Source tree cleanup:**
+- Stale content-hashed artifacts (`app-XXXX.js`, `styles-XXXX.css`, `manifest.json`) left over from the experimental content-hash pipeline removed from the source tree. The installed deb was always correct — these were dead files in the working directory only.
+- Removed unreachable `.jsx` entry from the `_MIME` map in `handlers.py` — `.jsx` files are blocked at HTTP 403 before the MIME lookup, so the entry was dead code.
 
-**Broken skins: `health` state missing from App component (fix):**
-- Chronicles, Mosaic, and Seal all referenced a `health` variable in their statusbar JSX that was never declared as state in the root App component. The variable was `undefined` on every render, causing the statusbar health dot and `retain_days` display to malfunction. Fixed by adding `const [health, setHealth] = useState(null)` to each broken skin's App and wiring it to the `/health` fetch.
+**postinst hardening:**
+- `postinst` now detects if `server.py --password` fails and prints a clear warning instead of silently showing credentials that won't work. Error output is saved to `/tmp/heimdall-init.log` for diagnosis.
 
-**Source `config.py`: wrong `FRONTEND_DIR` for local development (fix):**
-- `FRONTEND_DIR` was set to `Path(__file__).parent / "frontend"`, which resolves to `backend/frontend/` — a path that does not exist. Production is unaffected (build-deb.sh always overwrites `config.py` with the correct hardcoded `/opt/heimdall/frontend`), but any developer running `server.py` directly from the `backend/` directory would get 404s on every page load. Fixed to `Path(__file__).parent.parent / "frontend"`.
+---
 
-**Stale hashed build artifacts removed from source tree:**
-- Eight pre-v1.4 build artifacts (`app-XXXXXX.js`, `styles-XXXXXX.css`) and an unused `manifest.json` that referenced them were committed to the repo. Nothing in the current codebase reads the manifest — `skin-loader.js` uses plain `app.js?v=VERSION`. All nine files deleted; patterns added to `.gitignore` so they cannot reappear.
+### v1.4.1 — May 2026
+
+**Admin credential fix (critical):**
+- `postinst` generated a password and called `server.py --password $ADMIN_PW` to store it. The `--password` mode set the hash in the legacy `auth` table and exited — `UserManager.bootstrap_admin()` never ran, so the `users` table had no `admin` row. When the server started normally, `bootstrap_admin()` saw an empty users table and generated a **different** random password, logging it only to the journal. The credentials displayed on screen during install were wrong. Fixed: `--password` mode now creates the admin user row in the `users` table directly (or updates it if users already exist), ensuring the displayed password is exactly what works at login.
+
+**User password editing (all four skins):**
+- The Edit User modal only allowed changing a user's role — no password field was shown. Fixed: when editing an existing user, a **New Password** field now appears with a `(leave blank to keep current)` hint. If filled, the password is included in the PUT body; if left blank it is omitted and the existing password is unchanged.
+
+**Blank screen on Edit User (chronicles, mosaic, seal):**
+- The `newPw` state variable was added to the JSX but the `useState` declaration was missing in chronicles, mosaic, and seal. React threw a `ReferenceError` on mount, unmounting the entire component tree and producing a blank page. Fixed in all three skins.
+
+**postrm cleanup:**
+- `apt purge` left `/opt/heimdall` and `/etc/heimdall` behind with a warning because those directories contain files dpkg didn't install (SQLite databases, `.credentials`). `postrm` now explicitly `rm -rf`s all four Heimdall directories on purge, and also removes the `heimdall` group.
+
+**AI Explain view centred:**
+- The AI Explain content column had `maxWidth: 760` but no `margin: '0 auto'`, so it pinned to the left edge on all skins. Fixed.
+
+**Dynamic statusbar:**
+- Database dot was hardcoded green. Now reads `health?.status === 'ok'` — turns red and shows "DB Error" if `/health` fails.
+- "Retain 90 days" was hardcoded. Now reads `health?.retain_days` from the server, reflecting whatever `--retain-days` is configured.
+- `/health` response now includes `"retain_days": self.db.retain_days`.
+- Original skin was missing a 10-second health poll in the `App` component — only fetched on mount. Fixed.
+
+---
 
 ### v1.4 — May 2026
 

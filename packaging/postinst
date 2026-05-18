@@ -42,8 +42,16 @@ case "$1" in
     if [ ! -f "$CRED_FILE" ]; then
       ADMIN_PW=$(python3 -c "import secrets; print(secrets.token_urlsafe(14))")
 
-      # Initialise the config database with this password
-      python3 /opt/heimdall/server.py --password "$ADMIN_PW" >/dev/null 2>&1 || true
+      # Initialise the config database with this password.
+      # --password mode now creates the admin user row AND sets the auth hash,
+      # so both login paths work from first boot.
+      if ! python3 /opt/heimdall/server.py --password "$ADMIN_PW" 2>/tmp/heimdall-init.log; then
+        echo "Warning: could not initialise admin password — check /tmp/heimdall-init.log"
+        echo "You can set a password manually after the service starts:"
+        echo "  sudo heimdall --password <new>"
+        ADMIN_PW="(not set — run: sudo heimdall --password <new>)"
+      fi
+
       chown -R heimdall:heimdall /var/lib/heimdall 2>/dev/null || true
       chmod 750 /var/lib/heimdall 2>/dev/null || true
 
