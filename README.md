@@ -147,45 +147,45 @@ Heimdall is a single self-contained Python process with no external runtime depe
 ┌─────────────────────────────────────────────────────────────────────┐
 │                         Heimdall Process                            │
 │                                                                     │
-│  ┌──────────────┐   ┌──────────────────────────────────────────┐   │
-│  │  tail_thread │   │            HTTP Server                   │   │
-│  │              │   │     (stdlib http.server, port 8765)      │   │
-│  │  Reads and   │   │                                          │   │
-│  │  parses      │──▶│  REST API  │  Static Files  │  SSE /events│  │
-│  │  eve.json    │   └──────────────────────────────────────────┘   │
-│  │  line by     │                      │                           │
-│  │  line        │   ┌──────────────────▼───────────────────────┐   │
-│  │              │   │            SQLite Databases               │   │
-│  │  Applies     │   │                                          │   │
-│  │  suppression │   │  events.db     config.db     dns.db      │   │
-│  │  rules       │   │  ─────────     ─────────     ──────      │   │
-│  │              │   │  alerts        users          dns         │   │
-│  │  Broadcasts  │   │  flows         sessions       queries     │   │
-│  │  to SSE      │   │  http_events   webhooks                  │   │
-│  │              │   │  alert_notes   suppression               │   │
-│  │  Dispatches  │   │  alert_activity threat_intel             │   │
-│  │  webhooks    │   │  alert_meta    ai_cache                  │   │
-│  └──────────────┘   └──────────────────────────────────────────┘   │
+│  ┌──────────────┐   ┌──────────────────────────────────────────┐    │
+│  │  tail_thread │   │            HTTP Server                   │    │
+│  │              │   │     (stdlib http.server, port 8765)      │    │
+│  │  Reads and   │   │                                          │    │
+│  │  parses      │──▶│ REST API  │  Static Files  │  SSE /events│    │
+│  │  eve.json    │   └──────────────────────────────────────────┘    │
+│  │  line by     │                      │                            │
+│  │  line        │   ┌──────────────────▼───────────────────────┐    │
+│  │              │   │            SQLite Databases              │    │
+│  │  Applies     │   │                                          │    │
+│  │  suppression │   │  events.db     config.db     dns.db      │    │
+│  │  rules       │   │  ─────────     ─────────     ──────      │    │
+│  │              │   │  alerts        users          dns        │    │
+│  │  Broadcasts  │   │  flows         sessions       queries    │    │
+│  │  to SSE      │   │  http_events   webhooks                  │    │
+│  │              │   │  alert_notes   suppression               │    │
+│  │  Dispatches  │   │  alert_activity threat_intel             │    │
+│  │  webhooks    │   │  alert_meta    ai_cache                  │    │
+│  └──────────────┘   └──────────────────────────────────────────┘    │
 │                                                                     │
-│  ┌────────────────┐  ┌───────────────┐  ┌──────────────────────┐   │
-│  │ delivery_worker│  │  purge_thread │  │    replay_thread     │   │
-│  │                │  │               │  │                      │   │
-│  │ Drains webhook │  │ Hourly purge  │  │ Re-reads eve.json    │   │
-│  │ delivery queue │  │ of old rows.  │  │ from start to fill   │   │
-│  │ with retries   │  │ Cascades to   │  │ gaps (e.g. after     │   │
-│  │ (max 3)        │  │ notes/activity│  │ downtime). Admin-    │   │
-│  └────────────────┘  └───────────────┘  │ triggered via UI.   │   │
-│                                          └──────────────────────┘   │
+│  ┌────────────────┐  ┌───────────────┐  ┌──────────────────────┐    │
+│  │ delivery_worker│  │  purge_thread │  │    replay_thread     │    │
+│  │                │  │               │  │                      │    │
+│  │ Drains webhook │  │ Hourly purge  │  │ Re-reads eve.json    │    │
+│  │ delivery queue │  │ of old rows.  │  │ from start to fill   │    │
+│  │ with retries   │  │ Cascades to   │  │ gaps (e.g. after     │    │
+│  │ (max 3)        │  │ notes/activity│  │ downtime). Admin-    │    │
+│  └────────────────┘  └───────────────┘  │ triggered via UI.    │    │
+│                                         └──────────────────────┘    │
 └─────────────────────────────────────────────────────────────────────┘
          │ reads                                   │ serves
          ▼                                         ▼
   /var/log/suricata/              Browser (Chrome / Firefox / Safari)
        eve.json
   (Suricata output)           ┌─────────────────────────────────────┐
-                              │  React SPA (no build step at runtime)│
+                              │ React SPA (no build step at runtime)│
                               │                                     │
-                              │  skin-loader.js?v=N  → styles.css?v=N  │
-                              │                      → app.js?v=N      │
+                              │ skin-loader.js?v=N →styles.css?v=N  │
+                              │                   → app.js?v=N      │
                               │                  → styles.css?v=N   │
                               │                                     │
                               │  Four skins: original · chronicles  │
