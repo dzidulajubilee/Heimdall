@@ -40,6 +40,7 @@ from tail         import tail_thread                # noqa: E402
 from threat_intel import ThreatIntelDB              # noqa: E402
 from users        import UserManager                # noqa: E402
 from webhooks     import WebhookDB                  # noqa: E402
+from audit        import AuditLog                   # noqa: E402
 
 try:                                                # absent in the noai build
     from ai_explain import AIExplainDB              # noqa: E402
@@ -127,11 +128,13 @@ class Instance:
         self.ti_db    = ThreatIntelDB(conn_fn=self.cfg_db._conn)
         self.sup_db   = SuppressionDB(conn_fn=self.cfg_db._conn)
         self.ai_db    = AIExplainDB(conn_fn=self.cfg_db._conn) if AIExplainDB else None
+        self.audit    = AuditLog(conn_fn=self.cfg_db._conn)
 
         Handler.db, Handler.dns_db, Handler.auth = self.db, self.dns_db, self.auth
         Handler.registry, Handler.wdb, Handler.um = self.registry, self.wdb, self.um
         Handler.ti_db, Handler.sup_db, Handler.ai_db = self.ti_db, self.sup_db, self.ai_db
         Handler._eve_path = self.eve
+        Handler.audit, Handler._tls = self.audit, False
 
         threading.Thread(target=tail_thread,
                          args=(self.eve, self.db, self.dns_db, self.registry, self.wdb),

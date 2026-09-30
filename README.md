@@ -27,6 +27,7 @@ Heimdall IDS is a lightweight web dashboard that sits on top of [Suricata](https
 2. [Installation](#installation)
 3. [First Login](#first-login)
 4. [Configuration](#configuration)
+   - [HTTPS](#https)
 5. [Architecture](#architecture)
 6. [Features](#features)
 7. [Skins](#skins)
@@ -60,7 +61,7 @@ Heimdall IDS is a lightweight web dashboard that sits on top of [Suricata](https
 ## Installation
 
 ```bash
-sudo apt install ./heimdall-ids_1.4.4_all.deb
+sudo apt install ./heimdall-ids_1.4.5_all.deb
 ```
 
 That's it. The installer will:
@@ -106,7 +107,13 @@ Log in with `admin` and the generated password shown during install. The passwor
 sudo heimdall --password <yournewpassword>
 ```
 
-This is also the lock-out recovery path: it always leaves a working `admin` login with the admin role — creating the `admin` user if it was deleted, or re-enabling and re-promoting it if it was disabled or demoted — and ends every existing `admin` session. Since v1.4.4 the original install password stops working as soon as the admin password is changed.
+**Reset any other account** (for example a user who is locked out or disabled):
+```bash
+sudo heimdall --password <newpassword> --user bob
+```
+This resets the password, ends the user's sessions and re-enables the account if it was disabled; the role is unchanged. The account must already exist — if it does not, the command lists the existing usernames. Every reset is recorded in the audit log.
+
+Without `--user`, the command resets `admin`. This is also the lock-out recovery path: it always leaves a working `admin` login with the admin role — creating the `admin` user if it was deleted, or re-enabling and re-promoting it if it was disabled or demoted — and ends every existing `admin` session. Since v1.4.4 the original install password stops working as soon as the admin password is changed.
 
 ---
 
@@ -132,8 +139,49 @@ The file holds one option per line, written exactly as on the command line (for 
 | `--skin <name>` | `original` | Default skin for users who have not picked one: `original`, `chronicles`, `mosaic`, `seal`. A skin chosen with the switcher still wins. |
 | `--ai-provider <name>` | `openai` | AI provider (`openai`, `anthropic`, `deepseek`), used until AI settings are saved in the UI |
 | `--ai-key <key>` | _(none)_ | AI API key, used while no key is stored via the UI. Never copied into the database. Prefer the config file over the command line (command lines are visible in `ps`). |
+| `--tls-cert <file>` / `--tls-key <file>` | _(off)_ | Built-in HTTPS — see [HTTPS](#https). Both are required together. |
+| `--behind-proxy` | _(off)_ | Heimdall runs behind a reverse proxy on the same host: trust its `X-Real-IP` / `X-Forwarded-Proto` headers, from `127.0.0.1` only. Set automatically by `--setup-nginx`. |
 | `--config <file>` | — | Read options from a file (command line only) |
-| `--password <pw>` | — | Set or reset the admin password, then exit (command line only) |
+| `--password <pw>` | — | Reset an account's password, then exit (command line only) |
+| `--user <name>` | `admin` | With `--password`: the account to reset (command line only) |
+| `--setup-nginx` / `--remove-nginx` | — | Put Heimdall behind NGINX, or undo it — see [HTTPS](#https) (command line only) |
+
+### HTTPS
+
+Heimdall can be reached over HTTPS in two ways. Both are off by default.
+
+**Recommended — behind NGINX (Heimdall is not exposed at all):**
+
+```bash
+sudo heimdall --setup-nginx                                   # self-signed certificate
+sudo heimdall --setup-nginx --nginx-cert /path/cert.pem --nginx-key /path/key.pem
+sudo heimdall --setup-nginx --nginx-server-name ids.example.net   # optional host name
+```
+
+This single command:
+
+1. Installs NGINX with `apt` if it is missing.
+2. Uses your certificate, or generates a self-signed one (2048-bit RSA, 825 days) in `/etc/heimdall/tls/` whose names include the host name and IP addresses. It prints the certificate's SHA-256 fingerprint so users can verify it. A later run reuses it.
+3. Writes one NGINX site (`/etc/nginx/sites-available/heimdall`): HTTPS on 443 (TLS 1.2/1.3), port 80 redirecting to HTTPS, and the live-alert stream unbuffered.
+4. Binds Heimdall to `127.0.0.1` and enables `--behind-proxy`, through a clearly marked block at the end of `/etc/heimdall/heimdall.conf`. A timestamped backup of the file is kept; your own settings in it are untouched.
+5. Checks the result with `nginx -t`, then reloads NGINX and restarts Heimdall. If any step fails, every change is rolled back.
+
+Afterwards users open `https://<host>/`; `http://<host>:8765` no longer answers from the network. Other NGINX sites are never modified: if another site or program already uses port 443, setup stops without changing anything. When setup installs NGINX itself, NGINX's stock "Welcome to nginx" site is disabled.
+
+`--behind-proxy` keeps the login lockout and the audit log per real user: the client address comes from NGINX's `X-Real-IP` header, which Heimdall accepts only from `127.0.0.1` — a client cannot fake it.
+
+**Undo:** `sudo heimdall --remove-nginx` removes the Heimdall site and the managed block, reloads NGINX and restarts Heimdall on its own `--host`/`--port`. The NGINX package and the certificate are kept.
+
+**Alternative — built-in HTTPS (no NGINX):** add to `heimdall.conf`
+
+```
+--tls-cert /etc/heimdall/tls/cert.pem
+--tls-key  /etc/heimdall/tls/key.pem
+```
+
+The key must be readable by the `heimdall` user and no one else (`chown root:heimdall key.pem && chmod 640 key.pem`). Heimdall then serves HTTPS on its usual port (TLS 1.2 minimum) and refuses to start if the certificate cannot be loaded, rather than falling back to plain HTTP. `--setup-nginx` will not run while built-in HTTPS is enabled.
+
+With either option the session cookie is marked `Secure`. HSTS is not sent, because it would apply to every port on the host.
 
 **Service management:**
 
@@ -173,6 +221,7 @@ Heimdall is a single self-contained Python process with no external runtime depe
 │  │              │   │  alert_notes   suppression               │    │
 │  │  Dispatches  │   │  alert_activity threat_intel             │    │
 │  │  webhooks    │   │  alert_meta    ai_settings               │    │
+│  │              │   │                audit_log                 │    │
 │  └──────────────┘   └──────────────────────────────────────────┘    │
 │                                                                     │
 │  ┌────────────────┐  ┌───────────────┐  ┌──────────────────────┐    │
@@ -263,6 +312,11 @@ If Heimdall was offline while Suricata kept running, the **Replay** button re-re
 | **Viewer** | Read-only access to all views, including AI summaries |
 
 Roles are enforced at the API level and checked against the user's current account on every request: disabling, deleting or changing the role of a user takes effect immediately, including on their open live-alert stream.
+
+### Audit Log
+**Settings → Audit Log** (admins only) shows who changed what, newest first: sign-ins (successful and failed), user and role changes, webhook changes and tests, suppression rules, threat intel edits and imports, data clears, flush and replay, AI settings, and command-line password resets and NGINX setup/removal. Each entry records the time, user, role, client IP, action, target and details.
+
+Secrets are never recorded: passwords and API keys appear only as "changed", and webhook URLs only by host name because their paths contain tokens. The log keeps the newest 100,000 entries. It is also available as JSON from `GET /audit` (admin only; `limit`, `offset`, `action` prefix and `user` filters), and each entry is written to the journal (`journalctl -u heimdall | grep AUDIT`) for forwarding to a SIEM.
 
 ### Data Management
 Per-table **Clear All** buttons let admins flush alerts, flows, or DNS records independently. After a flush, **Replay** can restore alert history from `eve.json`.
@@ -364,14 +418,15 @@ Go to **Settings → Webhooks → Add Webhook** (admins only — webhook URLs co
 | Webhook SSRF | Webhooks are admin-only; private, loopback, link-local, CGNAT and IPv4-mapped destinations blocked by default (opt-in per webhook); redirects not followed |
 | API key storage | XOR-obfuscated in DB; never returned to browser |
 | SQL injection | Parameterised queries throughout; no string interpolation into SQL |
+| Transport security | Optional HTTPS via `--setup-nginx` (Heimdall bound to loopback) or built-in TLS 1.2+; `Secure` session cookie over HTTPS |
+| Audit trail | Admin-only audit log of sign-ins and all configuration and data-management changes; secrets never recorded |
 | Session security | PBKDF2-SHA256 passwords (260,000 iterations); indexed sessions with 7-day expiry, re-validated against the user's current account on every request; password reset, disable and delete revoke sessions |
 | Body size limits | Request bodies capped at 4 MB; bulk alert operations capped at 500 IDs |
 
 ### Known Gaps
 
-- **No TLS** — Heimdall listens on plain HTTP. For any network-exposed deployment, place behind nginx, Caddy, or use Tailscale.
+- **HTTPS is opt-in** — out of the box Heimdall listens on plain HTTP. For any network-exposed deployment use `sudo heimdall --setup-nginx` or built-in HTTPS (see [HTTPS](#https)).
 - **Webhook DNS rebinding** — the SSRF check resolves the hostname before delivery and the connection resolves it again, so a hostname whose DNS answer changes in between could reach a blocked address. Only admins can configure webhook URLs.
-- **No admin audit log** — user creation and role changes are not currently written to a dedicated audit trail.
 
 ---
 
@@ -380,15 +435,15 @@ Go to **Settings → Webhooks → Add Webhook** (admins only — webhook URLs co
 **Requirements:** `esbuild` (`npm install -g esbuild`), `dpkg-deb`
 
 ```bash
-# Build default version (1.4.4)
+# Build default version (1.4.5)
 bash build-deb.sh
 
 # Build a specific version
-bash build-deb.sh 1.4.5
+bash build-deb.sh 1.4.6
 
 # Output
-# packaging/build/heimdall-ids_1.4.4_all.deb
-# packaging/build/heimdall-ids-noai_1.4.4_all.deb
+# packaging/build/heimdall-ids_1.4.5_all.deb
+# packaging/build/heimdall-ids-noai_1.4.5_all.deb
 ```
 
 The build script:
@@ -405,6 +460,26 @@ The build script:
 ---
 
 ## Changelog
+
+### v1.4.5 — September 2026
+
+**HTTPS:**
+- `sudo heimdall --setup-nginx` puts Heimdall behind NGINX in one step: NGINX is installed if missing, HTTPS on 443 with your certificate or a generated self-signed one, port 80 redirects, Heimdall is bound to `127.0.0.1` so only NGINX is exposed, and everything is validated with `nginx -t` and rolled back on failure. `sudo heimdall --remove-nginx` undoes it.
+- New `--behind-proxy` mode keeps the login lockout and audit log per real client behind a proxy (headers trusted from `127.0.0.1` only).
+- Built-in HTTPS as an alternative: `--tls-cert` / `--tls-key` (TLS 1.2+, refuses to start if the certificate cannot be loaded).
+- The session cookie is marked `Secure` over HTTPS.
+
+**Audit log:** new admin-only **Audit Log** card in Settings and `GET /audit` endpoint, recording sign-ins and every configuration and data-management change. Secrets are never recorded. New `audit_log` table in `config.db` (created automatically; nothing existing changes).
+
+**Account recovery:** `sudo heimdall --password <pw> --user <name>` resets any account (password reset, sessions ended, re-enabled if disabled, role unchanged). `--user` is refused in `heimdall.conf`, so a stray line there can never redirect a reset.
+
+**Fixes:**
+- A rejected user edit (for example, demoting the last admin) no longer changes the password anyway: all checks now run before anything is saved.
+- Renaming a user to an existing name returns a clear 409 error instead of a server error; empty usernames are rejected.
+- Sending `null` for `enabled` in a user edit no longer disables the account.
+- Non-numeric signature IDs or expiry times in threat intel and suppression requests return 400 instead of a server error.
+
+---
 
 ### v1.4.4 — September 2026
 

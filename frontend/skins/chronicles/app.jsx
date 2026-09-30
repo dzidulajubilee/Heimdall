@@ -1107,6 +1107,7 @@ function SettingsView({ theme, setTheme, role, username, onLogout, onDataFlushed
       </div>)}
       {/* Replay / Flush */}
       {isAdmin && <ReplayFlushPanel onFlushed={onDataFlushed}/>}
+      {isAdmin && <AuditLogPanel/>}
 
       <div className="settings-card">
         <div className="settings-card-header"><span className="settings-card-title">Account</span></div>
@@ -2312,6 +2313,88 @@ function AIExplainView({ role }) {
 
 
 // ── ReplayFlushPanel — shared across all skins ───────────────────────────────
+function AuditLogPanel() {
+  // Admin audit log (GET /audit): who changed what. Collapsed until opened.
+  const PAGE = 50;
+  const [rows,    setRows]    = useState([]);
+  const [total,   setTotal]   = useState(0);
+  const [open,    setOpen]    = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [err,     setErr]     = useState('');
+
+  async function load(offset) {
+    setLoading(true); setErr('');
+    try {
+      const r = await fetch('/audit?limit=' + PAGE + '&offset=' + offset);
+      const d = await r.json();
+      if (!r.ok) { setErr(d.error || 'Could not load the audit log'); return; }
+      setRows(prev => offset ? prev.concat(d.entries) : d.entries);
+      setTotal(d.total);
+    } catch { setErr('Network error'); }
+    finally { setLoading(false); }
+  }
+  React.useEffect(() => { if (open) load(0); }, [open]);
+
+  const cell = { padding:'6px 8px', borderBottom:'1px solid var(--ln)', fontSize:11,
+                 fontFamily:'var(--mono)', color:'var(--tx2)', verticalAlign:'top', textAlign:'left' };
+  const head = { ...cell, color:'var(--tx3)', fontWeight:600, fontSize:9,
+                 textTransform:'uppercase', letterSpacing:'.06em' };
+  const btn  = { padding:'4px 12px', border:'1px solid var(--ln)', borderRadius:'var(--radius-sm,4px)',
+                 background:'transparent', color:'var(--tx2)', fontSize:11, cursor:'pointer' };
+
+  return (
+    <div className="settings-card" style={{marginBottom:12}}>
+      <div className="settings-card-header" style={{display:'flex', alignItems:'center'}}>
+        <span className="settings-card-title">Audit Log</span>
+        <span style={{marginLeft:'auto', display:'flex', gap:8}}>
+          {open && <button style={btn} disabled={loading} onClick={() => load(0)}>Refresh</button>}
+          <button style={btn} onClick={() => setOpen(o => !o)}>{open ? 'Hide' : 'Show'}</button>
+        </span>
+      </div>
+      {open && (
+        <div className="settings-card-body">
+          <div style={{fontSize:11, color:'var(--tx3)', marginBottom:10}}>
+            Who changed what: sign-ins, users and roles, webhooks, suppression, threat intel,
+            data clears and replay, AI settings, and command-line actions. Passwords and keys
+            are never recorded.
+          </div>
+          {err && <div style={{fontSize:12, color:'var(--danger,#f05454)', marginBottom:8}}>{err}</div>}
+          <div style={{overflowX:'auto'}}>
+            <table style={{width:'100%', borderCollapse:'collapse'}}>
+              <thead>
+                <tr>{['Time', 'User', 'Action', 'Target', 'Details', 'IP'].map(h => <th key={h} style={head}>{h}</th>)}</tr>
+              </thead>
+              <tbody>
+                {rows.map(e => (
+                  <tr key={e.id}>
+                    <td style={cell}>{new Date(e.ts * 1000).toLocaleString()}</td>
+                    <td style={cell}>{(e.username || '—') + (e.role ? ' (' + e.role + ')' : '')}</td>
+                    <td style={{...cell, color: e.action === 'login.failure' ? 'var(--danger,#f05454)' : 'var(--tx1)'}}>{e.action}</td>
+                    <td style={cell}>{e.target}</td>
+                    <td style={cell}>{e.detail}</td>
+                    <td style={cell}>{e.ip}</td>
+                  </tr>
+                ))}
+                {!rows.length && !loading && !err && (
+                  <tr><td style={cell} colSpan={6}>No entries yet.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+          <div style={{display:'flex', alignItems:'center', marginTop:10, fontSize:11, color:'var(--tx3)'}}>
+            <span>{rows.length} of {total}</span>
+            {rows.length < total && (
+              <button style={{...btn, marginLeft:'auto'}} disabled={loading} onClick={() => load(rows.length)}>
+                {loading ? 'Loading…' : 'Load more'}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ReplayFlushPanel({ onFlushed }) {
   const [replay,    setReplay]    = useState({ running:false, done:false, inserted:0, skipped:0, total:0, error:null });
   const [flushing,  setFlushing]  = useState(false);

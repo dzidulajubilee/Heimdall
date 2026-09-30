@@ -2,8 +2,10 @@
 Heimdall IDS Dashboard — HTTP Request Handler
 """
 
+import ipaddress
 import json
 import logging
+import ssl
 import threading
 import time
 from http.cookies import SimpleCookie
@@ -71,6 +73,10 @@ class Handler(BaseHTTPRequestHandler):
     ti_db     = None
     sup_db    = None
     ai_db     = None
+    audit     = None   # AuditLog (audit.py); None disables auditing
+    _tls      = False  # True when serving HTTPS → session cookie gets Secure
+    _behind_proxy = False  # --behind-proxy: trust X-Real-IP / X-Forwarded-Proto
+                           # from a proxy on this host (loopback peer) only
     _eve_path = None   # set by server.py at startup; used by replay
 
     server_version = ""
@@ -82,6 +88,10 @@ class Handler(BaseHTTPRequestHandler):
             super().handle_one_request()
         except (BrokenPipeError, ConnectionResetError):
             pass  # client disconnected mid-response — normal
+        except ssl.SSLError as exc:
+            # TLS handshake failed (e.g. plain HTTP sent to the HTTPS port, or a
+            # scanner) — nothing can be sent back; don't log a traceback.
+            log.debug("TLS error from %s: %s", self.client_address[0], exc)
         except Exception:
             log.exception("Unhandled exception in %s %s",
                           getattr(self, "command", "?"),
@@ -166,7 +176,7 @@ class Handler(BaseHTTPRequestHandler):
         if self._authed():
             return True
         p = urlparse(self.path).path
-        api_paths = ("/alerts", "/flows", "/dns", "/http", "/events",
+        api_paths = ("/alerts", "/flows", "/dns", "/http", "/events", "/audit",
                      "/health", "/charts", "/webhooks", "/users", "/me",
                      "/threat-intel", "/suppression", "/ai-config", "/ai-explain", "/ai-models",
                      "/replay", "/flush",
@@ -178,6 +188,41 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self._redirect("/login")
         return False
+
+    _LOOPBACK = ("127.0.0.1", "::1", "::ffff:127.0.0.1")
+
+    def _from_local_proxy(self) -> bool:
+        return self._behind_proxy and self.client_address[0] in self._LOOPBACK
+
+    def address_string(self) -> str:
+        """Client IP for logs, the login rate limiter and the audit log.
+        Behind a local reverse proxy every peer is 127.0.0.1, so in
+        --behind-proxy mode the proxy's X-Real-IP is used — but only when the
+        request really comes from loopback; anyone else cannot set it."""
+        if self._from_local_proxy():
+            real = (self.headers.get("X-Real-IP") or "").strip()
+            try:
+                return str(ipaddress.ip_address(real))
+            except ValueError:
+                pass
+        return self.client_address[0]
+
+    def _https(self) -> bool:
+        return self._tls or (self._from_local_proxy() and
+                             self.headers.get("X-Forwarded-Proto", "").lower() == "https")
+
+    def _audit(self, action: str, target="", detail=""):
+        """Record an audit entry for the current session's user (never raises)."""
+        if self.audit is None:
+            return
+        s = self._session()
+        self.audit.record(action, username=s["username"] if s else "",
+                          role=s["role"] if s else "", ip=self.address_string(),
+                          target=target, detail=detail)
+
+    def _cookie(self, value: str, max_age: int) -> str:
+        secure = "; Secure" if self._https() else ""
+        return f"suri_session={value}; Path=/; HttpOnly; SameSite=Strict; Max-Age={max_age}{secure}"
 
     # ── Low-level helpers ─────────────────────────────────────────────────────
 
@@ -324,8 +369,13 @@ class Handler(BaseHTTPRequestHandler):
         elif p.path == "/threat-intel/lookup":
             sid = qs.get("sig_id", [None])[0]
             cat = qs.get("category", [None])[0]
-            self._json(self.ti_db.lookup(
-                sig_id=int(sid) if sid else None, category=cat) or {})
+            try:
+                sid = int(sid) if sid else None
+            except ValueError:
+                self._json({"error": "sig_id must be an integer"}, 400); return
+            self._json(self.ti_db.lookup(sig_id=sid, category=cat) or {})
+        elif p.path == "/audit":
+            self._serve_audit(qs)
         elif p.path == "/threat-intel/gaps":
             top = self.db.top_sids(limit=200)
             self._json(self.ti_db.coverage_gaps(top, limit=20))
@@ -434,18 +484,13 @@ class Handler(BaseHTTPRequestHandler):
         if not self._require_auth(): return
         if not self._check_origin(): return
         p = urlparse(self.path)
-        if p.path == "/alerts":
+        if p.path in ("/alerts", "/flows", "/dns", "/threat-intel"):
             if not self._require_role("admin"): return
-            self._json({"deleted": self.db.clear_all()})
-        elif p.path == "/flows":
-            if not self._require_role("admin"): return
-            self._json({"deleted": self.db.clear_flows()})
-        elif p.path == "/dns":
-            if not self._require_role("admin"): return
-            self._json({"deleted": self.dns_db.clear()})
-        elif p.path == "/threat-intel":
-            if not self._require_role("admin"): return
-            self._json({"deleted": self.ti_db.clear_all()})
+            n = {"/alerts": self.db.clear_all, "/flows": self.db.clear_flows,
+                 "/dns": self.dns_db.clear, "/threat-intel": self.ti_db.clear_all}[p.path]()
+            self._audit("threat_intel.clear" if p.path == "/threat-intel" else "data.clear",
+                        target=p.path.lstrip("/"), detail=f"{n} deleted")
+            self._json({"deleted": n})
         elif p.path.startswith("/users/"):
             try:   self._user_delete(int(p.path.split("/")[2]))
             except (ValueError, IndexError): self.send_error(400)
@@ -453,7 +498,10 @@ class Handler(BaseHTTPRequestHandler):
             if not self._require_role("admin"): return
             try:
                 wid = int(p.path.split("/")[2])
+                wh  = self.wdb.get(wid)
                 self.wdb.delete(wid)
+                if wh:
+                    self._audit("webhook.delete", target=wh["name"])
                 self._json({"deleted": wid})
             except (ValueError, IndexError): self.send_error(400)
         elif p.path.startswith("/threat-intel/"):
@@ -527,6 +575,9 @@ class Handler(BaseHTTPRequestHandler):
 
         if user:
             _clear_failures(ip)
+            if self.audit:
+                self.audit.record("login.success", username=user["username"],
+                                  role=user["role"], ip=self.address_string())
             token = self.auth.create_session(username=user["username"], role=user["role"])
             log.info("Login OK  user=%s role=%s from %s",
                      user["username"], user["role"], self.address_string())
@@ -534,24 +585,27 @@ class Handler(BaseHTTPRequestHandler):
                                "username": user["username"]}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Set-Cookie",
-                f"suri_session={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={SESSION_TTL}")
+            self.send_header("Set-Cookie", self._cookie(token, SESSION_TTL))
             self.send_header("Content-Length", str(len(resp)))
             self.end_headers()
             self.wfile.write(resp)
         else:
             _record_failure(self.address_string())
+            if self.audit:
+                self.audit.record("login.failure", username=username or "(blank)",
+                                  ip=self.address_string())
             log.warning("Failed login  user=%r from %s",
                         username or "(no username)", self.address_string())
             time.sleep(1)
             self._json({"error": "Invalid username or password"}, 401)
 
     def _logout(self):
+        if self._session():
+            self._audit("logout")
         self.auth.revoke_session(self._token())
         self.send_response(302)
         self.send_header("Location", "/login")
-        self.send_header("Set-Cookie",
-            "suri_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0")
+        self.send_header("Set-Cookie", self._cookie("", 0))
         self.send_header("Content-Length", "0")
         self.end_headers()
 
@@ -617,6 +671,7 @@ class Handler(BaseHTTPRequestHandler):
             }, 400); return
 
         deleted = self.db.delete_by_ids(ids)
+        self._audit("alerts.delete_selected", detail=f"{deleted} deleted")
         self._json({"deleted": deleted})
 
     def _add_alert_note(self, alert_id: str):
@@ -677,7 +732,10 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": f"url exceeds maximum length of {_MAX_URL_LEN}"}, 400); return
         if wtype not in ("slack", "discord", "generic"):
             self._json({"error": "type must be slack, discord, or generic"}, 400); return
-        self._json(self.wdb.create(name, wtype, url, severities, enabled, allow_local), 201)
+        created = self.wdb.create(name, wtype, url, severities, enabled, allow_local)
+        self._audit("webhook.create", target=name,
+                    detail=f"type={wtype} host={_url_host(url)} allow_local={allow_local}")
+        self._json(created, 201)
 
     def _webhook_update(self, wid: int):
         if not self._require_role("admin"): return
@@ -685,7 +743,11 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": "Not found"}, 404); return
         body, err = self._read_json()
         if err: return
-        self._json(self.wdb.update(wid, **body))
+        updated = self.wdb.update(wid, **body)
+        changes = [f"url host={_url_host(body['url'])}" if k == "url" else f"{k}={body[k]}"
+                   for k in ("name", "type", "url", "enabled", "severities", "allow_local") if k in body]
+        self._audit("webhook.update", target=(updated or {}).get("name", str(wid)), detail="; ".join(changes))
+        self._json(updated)
 
     def _webhook_test(self, wid: int):
         if not self._require_role("admin"): return
@@ -703,6 +765,7 @@ class Handler(BaseHTTPRequestHandler):
         }
         error = deliver(wh["url"], build_payload(wh["type"], test_alert),
                         allow_local=wh.get("allow_local", False))
+        self._audit("webhook.test", target=wh["name"], detail="ok" if error is None else "failed")
         self._json({"ok": error is None, "error": error})
 
     # ── Users ─────────────────────────────────────────────────────────────────
@@ -725,6 +788,7 @@ class Handler(BaseHTTPRequestHandler):
         user = self.um.create(username, password, role)
         if user is None:
             self._json({"error": f"Username '{username}' already exists"}, 409); return
+        self._audit("user.create", target=username, detail=f"role={role}")
         self._json(user, 201)
 
     def _user_update(self, uid: int):
@@ -734,31 +798,68 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": "Not found"}, 404); return
         body, err = self._read_json()
         if err: return
-        if "password" in body:
-            pw = str(body.pop("password", "")).strip()
-            if pw:
-                self.um.set_password(uid, pw)
-                # A password reset ends the user's other sessions. An admin
-                # changing their own password stays signed in on this browser.
-                me   = self._session()
-                keep = self._token() if me and me["username"].lower() == user["username"].lower() else None
-                self.auth.revoke_user_sessions(user["username"], keep_token=keep)
-        if body.get("role") and body["role"] != "admin":
+        if not isinstance(body, dict):
+            self._json({"error": "Bad request"}, 400); return
+
+        # ── Validate everything first: a rejected edit changes nothing ────────
+        # (Before 1.4.5 the password was changed before the checks below ran.)
+        pw = str(body.get("password") or "").strip()
+        if len(pw) > _MAX_PASSWORD_LEN:
+            self._json({"error": f"password exceeds maximum length of {_MAX_PASSWORD_LEN}"}, 400); return
+        role    = body.get("role")
+        enabled = body.get("enabled")
+        if role is not None and role not in ("admin", "analyst", "viewer"):
+            self._json({"error": "role must be admin, analyst, or viewer"}, 400); return
+        if role and role != "admin":
             if user["role"] == "admin" and self.um.count_admins() <= 1:
                 self._json({"error": "Cannot demote the last admin"}, 400); return
-        if body.get("enabled") is not None:
-            if not body["enabled"] and user["role"] == "admin":
-                if self.um.count_admins() <= 1:
-                    self._json({"error": "Cannot disable the last admin"}, 400); return
-        updated = self.um.update(uid, **{k: v for k, v in body.items()
-                                         if k in ("role", "enabled", "username")})
+        if enabled is not None and not enabled and user["role"] == "admin":
+            if self.um.count_admins() <= 1:
+                self._json({"error": "Cannot disable the last admin"}, 400); return
+        new_name = None
+        if "username" in body:
+            new_name = str(body.get("username") or "").strip()
+            if not new_name:
+                self._json({"error": "username cannot be empty"}, 400); return
+            if len(new_name) > _MAX_FIELD_LEN:
+                self._json({"error": f"username exceeds maximum length of {_MAX_FIELD_LEN}"}, 400); return
+            other = self.um.get_by_username(new_name)
+            if other and other["id"] != uid:
+                self._json({"error": f"Username '{new_name}' already exists"}, 409); return
+
+        # ── Apply ─────────────────────────────────────────────────────────────
+        me      = self._session()
+        is_self = bool(me and me["username"].lower() == user["username"].lower())
+        fields  = {}
+        if role is not None:     fields["role"] = role          # null = unchanged
+        if enabled is not None:  fields["enabled"] = enabled    # (null used to disable)
+        if new_name is not None: fields["username"] = new_name
+        updated = self.um.update(uid, **fields)
         # Role and enabled changes apply on the next request (get_session reads
-        # the users table). Disabling also revokes, so re-enabling later does
-        # not revive old tokens; a rename moves sessions with the user.
-        if updated and not updated["enabled"]:
-            self.auth.revoke_user_sessions(updated["username"])
-        if updated and updated["username"] != user["username"]:
+        # the users table). A rename moves sessions with the user; disabling
+        # revokes them so re-enabling later does not revive old tokens.
+        if updated["username"] != user["username"]:
             self.auth.rename_user_sessions(user["username"], updated["username"])
+        if pw:
+            self.um.set_password(uid, pw)
+            # A password reset ends the user's other sessions. An admin changing
+            # their own password stays signed in on this browser.
+            self.auth.revoke_user_sessions(updated["username"],
+                                           keep_token=self._token() if is_self else None)
+        if not updated["enabled"]:
+            self.auth.revoke_user_sessions(updated["username"])
+
+        changes = []
+        if role is not None and role != user["role"]:
+            changes.append(f"role {user['role']}→{role}")
+        if enabled is not None and bool(enabled) != bool(user["enabled"]):
+            changes.append("enabled" if enabled else "disabled")
+        if updated["username"] != user["username"]:
+            changes.append(f"renamed to {updated['username']}")
+        if pw:
+            changes.append("password reset")
+        if changes:
+            self._audit("user.update", target=user["username"], detail="; ".join(changes))
         self._json(updated)
 
     def _user_delete(self, uid: int):
@@ -775,6 +876,7 @@ class Handler(BaseHTTPRequestHandler):
         # Sessions are keyed by username: revoke them so a future account with
         # the same name cannot inherit them.
         self.auth.revoke_user_sessions(user["username"])
+        self._audit("user.delete", target=user["username"], detail=f"role={user['role']}")
         self._json({"deleted": uid})
 
     # ── SSE ──────────────────────────────────────────────────────────────────
@@ -876,6 +978,8 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError as exc:
             self._json({"error": str(exc)}, 400); return
         _ai.CACHE.clear()   # new provider/key/model → regenerate summaries on demand
+        self._audit("ai.config", detail=f"provider={updated['provider']} model={updated['model']} "
+                    f"enabled={updated['enabled']}" + ("; API key changed" if api_key else ""))
         self._json(updated)
 
     def _ai_models(self):
@@ -960,6 +1064,7 @@ class Handler(BaseHTTPRequestHandler):
             daemon=True,
         )
         t.start()
+        self._audit("data.replay")
         self._json({"ok": True, "message": "Replay started"})
 
     def _flush_all(self):
@@ -967,6 +1072,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self._require_role("admin"): return
         counts = self.db.flush_all_records(self.dns_db)
         log.info("flush_all: %s", counts)
+        self._audit("data.flush", detail=", ".join(f"{v} {k}" for k, v in counts.items()))
         self._json({"ok": True, "deleted": counts})
 
     # ── Threat Intel ──────────────────────────────────────────────────────────
@@ -982,6 +1088,9 @@ class Handler(BaseHTTPRequestHandler):
         category = str(body.get('category', '')).strip() or None
         if not sig_id and not category:
             self._json({'error': 'Either sig_id or category is required'}, 400); return
+        if sig_id and not _is_int(sig_id):
+            self._json({'error': 'sig_id must be an integer'}, 400); return
+        self._audit('threat_intel.create', target=f"sid {sig_id}" if sig_id else f"category {category}")
         s = self._session()
         self._json(self.ti_db.create(
             sig_id=sig_id, sig_msg=str(body.get('sig_msg','')).strip() or None,
@@ -995,13 +1104,18 @@ class Handler(BaseHTTPRequestHandler):
             self._json({'error': 'Not found'}, 404); return
         body, err = self._read_json()
         if err: return
-        self._json(self.ti_db.update(tid, **body))
+        updated = self.ti_db.update(tid, **body)
+        self._audit('threat_intel.update', target=f"id {tid}",
+                    detail=", ".join(k for k in body if k in ('sig_id', 'sig_msg', 'category',
+                                                              'explanation', 'tags', 'refs')))
+        self._json(updated)
 
     def _ti_delete(self, tid):
         if not self._require_role('admin'): return
         if not self.ti_db.get_by_id(tid):
             self._json({'error': 'Not found'}, 404); return
         self.ti_db.delete(tid)
+        self._audit('threat_intel.delete', target=f"id {tid}")
         self._json({'deleted': tid})
 
     def _export_htf(self):
@@ -1031,6 +1145,8 @@ class Handler(BaseHTTPRequestHandler):
         user      = s['username'] if s else 'import'
         overwrite = bool(body.get('overwrite', False))
         result    = self.ti_db.import_htf(content, imported_by=user, overwrite=overwrite)
+        self._audit('threat_intel.import', detail=f"overwrite={overwrite} " + ", ".join(
+            f"{k}={v}" for k, v in result.items() if isinstance(v, int)))
         self._json(result, 200)
 
     # ── Suppression ───────────────────────────────────────────────────────────
@@ -1048,6 +1164,13 @@ class Handler(BaseHTTPRequestHandler):
         if not sig_id and not src_ip and not category:
             self._json({'error': 'At least one of sig_id, src_ip, or category is required'}, 400)
             return
+        if sig_id and not _is_int(sig_id):
+            self._json({'error': 'sig_id must be an integer'}, 400); return
+        if body.get('expires_at') and not _is_float(body.get('expires_at')):
+            self._json({'error': 'expires_at must be a Unix timestamp'}, 400); return
+        self._audit('suppression.create', target=name,
+                    detail=" ".join(f"{k}={v}" for k, v in (('sig_id', sig_id), ('src_ip', src_ip),
+                                                            ('category', category)) if v))
         s = self._session()
         self._json(self.sup_db.create(
             name=name, sig_id=sig_id, src_ip=src_ip, category=category,
@@ -1061,12 +1184,53 @@ class Handler(BaseHTTPRequestHandler):
             self._json({'error': 'Not found'}, 404); return
         body, err = self._read_json()
         if err: return
-        self._json(self.sup_db.update(rule_id, **body))
+        updated = self.sup_db.update(rule_id, **body)
+        self._audit('suppression.update', target=(updated or {}).get('name', str(rule_id)),
+                    detail="; ".join(f"{k}={body[k]}" for k in ('name', 'sig_id', 'src_ip', 'category',
+                                     'reason', 'expires_at', 'enabled') if k in body))
+        self._json(updated)
 
     def _sup_delete(self, rule_id):
         if not self._require_role('admin'): return
         if not self.sup_db.get_by_id(rule_id):
             self._json({'error': 'Not found'}, 404); return
+        rule = self.sup_db.get_by_id(rule_id)
         self.sup_db.delete(rule_id)
+        self._audit('suppression.delete', target=(rule or {}).get('name', str(rule_id)))
         self._json({'deleted': rule_id})
 
+    # ── Audit log ─────────────────────────────────────────────────────────────
+
+    def _serve_audit(self, qs: dict):
+        """GET /audit?limit=&offset=&action=&user= — newest first. Admin only."""
+        if not self._require_role("admin"): return
+        if self.audit is None:
+            self._json({"entries": [], "total": 0}); return
+        limit  = self._qs_int(qs, "limit",  100, 1, 500)
+        offset = self._qs_int(qs, "offset", 0,   0, 10_000_000)
+        action = (qs.get("action", [""])[0] or "").strip()[:64] or None
+        user   = (qs.get("user",   [""])[0] or "").strip()[:64] or None
+        entries, total = self.audit.fetch(limit=limit, offset=offset, action=action, username=user)
+        self._json({"entries": entries, "total": total, "limit": limit, "offset": offset})
+
+
+def _url_host(url) -> str:
+    """Host part only — webhook URL paths carry secrets and are never audited."""
+    try:
+        return urlparse(str(url)).hostname or "?"
+    except ValueError:
+        return "?"
+
+
+def _is_int(v) -> bool:
+    try:
+        int(v); return not isinstance(v, bool)
+    except (TypeError, ValueError):
+        return False
+
+
+def _is_float(v) -> bool:
+    try:
+        float(v); return not isinstance(v, bool)
+    except (TypeError, ValueError):
+        return False
