@@ -18,6 +18,7 @@ What is removed
       - ai_db class attribute                None sentinel
       - GET  /ai-config route + body         settings endpoint
       - POST /ai-explain route + body        explain endpoint
+      - POST /ai-models route + body         model-list endpoint
       - PUT  /ai-config (do_PUT first branch)
       - _ai_config_update() method
       - _ai_explain() method
@@ -25,6 +26,8 @@ What is removed
       - from ai_explain import AIExplainDB
       - ai_db = AIExplainDB(…)
       - Handler.ai_db = ai_db
+      - --ai-provider / --ai-key options (ignored with a warning if present
+        in heimdall.conf)
 
   Frontend (all four skins — chronicles, mosaic, original, seal)
     - function AIExplainView(…)              entire component
@@ -158,10 +161,18 @@ def strip_handlers(src: str) -> str:
         '            s = self.ai_db.get_settings()\n'
         '            # Never expose raw key to frontend\n'
         '            self._json({\n'
-        '                "provider":    s["provider"],\n'
-        '                "enabled":     s["enabled"],\n'
-        '                "api_key_set": s["api_key_set"],\n'
+        '                "provider":       s["provider"],\n'
+        '                "enabled":        s["enabled"],\n'
+        '                "api_key_set":    s["api_key_set"],\n'
+        '                "model":          s["model"],\n'
+        '                "models":         s["models"],\n'
+        '                "default_models": s["default_models"],\n'
         '            })\n', '', 1)
+
+    # Step 3b — POST /ai-models literal block
+    src = src.replace(
+        '        elif p.path == "/ai-models":\n'
+        '            self._ai_models()\n', '', 1)
 
     # Step 4 — line-level removals
     src = remove_lines_matching(src, [
@@ -169,11 +180,13 @@ def strip_handlers(src: str) -> str:
         r'^\s+ai_db\s*=\s*None',
         r'"/ai-config"',
         r'"/ai-explain"',
+        r'"/ai-models"',
     ])
 
     # Step 5 — remove handler methods
     src = remove_python_function(src, '_ai_config_update')
     src = remove_python_function(src, '_ai_explain')
+    src = remove_python_function(src, '_ai_models')
 
     return src
 
@@ -183,6 +196,8 @@ def strip_server(src: str) -> str:
         r'from ai_explain\s+import',
         r'\bai_db\b\s*=\s*AIExplainDB',
         r'Handler\.ai_db\s*=',
+        r'add_argument\("--ai-provider"',   # single-line definitions in server.py
+        r'add_argument\("--ai-key"',
     ])
 
 

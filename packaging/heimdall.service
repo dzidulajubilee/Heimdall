@@ -10,13 +10,10 @@ User=heimdall
 Group=heimdall
 WorkingDirectory=/var/lib/heimdall
 
-ExecStart=/usr/bin/heimdall \
-    --eve /var/log/suricata/eve.json \
-    --db /var/lib/heimdall/events.db \
-    --dns-db /var/lib/heimdall/dns.db \
-    --config-db /var/lib/heimdall/config.db \
-    --host 0.0.0.0 \
-    --port 8765
+# Options come from /etc/heimdall/heimdall.conf (the /usr/bin/heimdall wrapper
+# passes --config). The previous hard-coded arguments equalled the installed
+# defaults, which still apply to anything the config file does not set.
+ExecStart=/usr/bin/heimdall
 
 Restart=on-failure
 RestartSec=5s

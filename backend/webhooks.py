@@ -301,9 +301,23 @@ _SSRF_BLOCKED_NETS = [
     ipaddress.ip_network("192.168.0.0/16"),
     ipaddress.ip_network("127.0.0.0/8"),
     ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("0.0.0.0/8"),       # "this host" — 0.0.0.0 reaches localhost on Linux
+    ipaddress.ip_network("100.64.0.0/10"),   # carrier-grade NAT / Tailscale
     ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("::/128"),          # unspecified
     ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("fe80::/10"),       # IPv6 link-local
 ]
+
+
+def _ip_blocked(ip) -> bool:
+    """True if ip is a private/loopback/link-local/unspecified destination.
+    IPv4-mapped IPv6 (e.g. ::ffff:127.0.0.1) is unwrapped and checked as IPv4."""
+    if ip.version == 6 and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    if ip.is_unspecified or ip.is_loopback or ip.is_link_local:
+        return True
+    return any(ip in net for net in _SSRF_BLOCKED_NETS)
 
 def _ssrf_safe(url: str, allow_local: bool = False) -> bool:
     """
@@ -324,12 +338,24 @@ def _ssrf_safe(url: str, allow_local: bool = False) -> bool:
         from urllib.parse import urlparse as _up
         host = _up(url).hostname or ""
         for addr in _socket.getaddrinfo(host, None):
-            ip = ipaddress.ip_address(addr[4][0])
-            if any(ip in net for net in _SSRF_BLOCKED_NETS):
+            ip = ipaddress.ip_address(addr[4][0].split("%", 1)[0])  # drop IPv6 zone id
+            if _ip_blocked(ip):
                 return False
     except Exception:
         return False
     return True
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Refuse HTTP redirects. The SSRF check validates only the configured URL;
+    following a redirect would let an external endpoint bounce delivery to an
+    internal host. (urllib also turns a redirected POST into a body-less GET,
+    so a redirected webhook never delivered its payload anyway.)"""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
 
 
 def deliver(url: str, payload: dict, allow_local: bool = False) -> str | None:
@@ -352,11 +378,14 @@ def deliver(url: str, payload: dict, allow_local: bool = False) -> str | None:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=DELIVERY_TIMEOUT) as resp:
+        with _OPENER.open(req, timeout=DELIVERY_TIMEOUT) as resp:
             if 200 <= resp.status < 300:
                 return None
             return f"HTTP {resp.status}"
     except urllib.error.HTTPError as e:
+        if 300 <= e.code < 400:
+            return (f"HTTP {e.code}: redirect not followed — "
+                    "point the webhook at the final URL")
         return f"HTTP {e.code}: {e.reason}"
     except urllib.error.URLError as e:
         return f"URLError: {e.reason}"

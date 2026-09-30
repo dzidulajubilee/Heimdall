@@ -8,7 +8,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-VERSION="${1:-1.4.3}"
+VERSION="${1:-1.4.4}"
 PKG="heimdall-ids_${VERSION}_all"
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 BUILD="${ROOT}/packaging/build/${PKG}"
@@ -137,7 +137,7 @@ CONF
 # ── 8. CLI wrapper ────────────────────────────────────────────────────────────
 cat > "${BUILD}/usr/bin/heimdall" << 'WRAPPER'
 #!/bin/sh
-exec /usr/bin/python3 /opt/heimdall/server.py "$@"
+exec /usr/bin/python3 /opt/heimdall/server.py --config /etc/heimdall/heimdall.conf "$@"
 WRAPPER
 chmod 755 "${BUILD}/usr/bin/heimdall"
 chmod 755 "${BUILD}/var/lib/heimdall" "${BUILD}/var/log/heimdall" "${BUILD}/etc/heimdall"
@@ -254,7 +254,7 @@ CONF
 
 cat > "${NOAI_BUILD}/usr/bin/heimdall" << 'WRAPPER'
 #!/bin/sh
-exec /usr/bin/python3 /opt/heimdall/server.py "$@"
+exec /usr/bin/python3 /opt/heimdall/server.py --config /etc/heimdall/heimdall.conf "$@"
 WRAPPER
 chmod 755 "${NOAI_BUILD}/usr/bin/heimdall"
 chmod 755 "${NOAI_BUILD}/var/lib/heimdall" "${NOAI_BUILD}/var/log/heimdall" "${NOAI_BUILD}/etc/heimdall"

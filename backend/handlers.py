@@ -168,7 +168,7 @@ class Handler(BaseHTTPRequestHandler):
         p = urlparse(self.path).path
         api_paths = ("/alerts", "/flows", "/dns", "/http", "/events",
                      "/health", "/charts", "/webhooks", "/users", "/me",
-                     "/threat-intel", "/suppression", "/ai-config", "/ai-explain",
+                     "/threat-intel", "/suppression", "/ai-config", "/ai-explain", "/ai-models",
                      "/replay", "/flush",
                      "/threat-intel/export", "/threat-intel/import")
         if p.startswith("/frontend/") and p not in self._PUBLIC_FRONTEND:
@@ -308,6 +308,8 @@ class Handler(BaseHTTPRequestHandler):
         elif p.path == "/charts":
             self._serve_charts(qs)
         elif p.path == "/webhooks":
+            # Admin-only: webhook URLs embed secrets (Slack/Discord tokens)
+            if not self._require_role("admin"): return
             self._json({"webhooks": self.wdb.get_all()})
         elif p.path == "/me":
             s = self._session()
@@ -333,9 +335,12 @@ class Handler(BaseHTTPRequestHandler):
             s = self.ai_db.get_settings()
             # Never expose raw key to frontend
             self._json({
-                "provider":    s["provider"],
-                "enabled":     s["enabled"],
-                "api_key_set": s["api_key_set"],
+                "provider":       s["provider"],
+                "enabled":        s["enabled"],
+                "api_key_set":    s["api_key_set"],
+                "model":          s["model"],
+                "models":         s["models"],
+                "default_models": s["default_models"],
             })
         elif p.path == "/replay/status":
             from tail import get_replay_status
@@ -368,6 +373,8 @@ class Handler(BaseHTTPRequestHandler):
             self._set_skin()
         elif p.path == "/ai-explain":
             self._ai_explain()
+        elif p.path == "/ai-models":
+            self._ai_models()
         elif p.path == "/replay":
             self._start_replay()
         elif p.path == "/flush":
@@ -443,6 +450,7 @@ class Handler(BaseHTTPRequestHandler):
             try:   self._user_delete(int(p.path.split("/")[2]))
             except (ValueError, IndexError): self.send_error(400)
         elif p.path.startswith("/webhooks/"):
+            if not self._require_role("admin"): return
             try:
                 wid = int(p.path.split("/")[2])
                 self.wdb.delete(wid)
@@ -510,11 +518,12 @@ class Handler(BaseHTTPRequestHandler):
         username = body.get("username", "").strip()
         pw       = body.get("password", "")
 
+        # RBAC users table only. The legacy single-password fallback (auth
+        # table 'pw_hash') was removed in 1.4.4: it kept the install-time
+        # password valid forever — after UI password changes, and even for a
+        # disabled or deleted admin. Recovery is `heimdall --password <new>`,
+        # which now always restores a working, enabled 'admin' user.
         user = self.um.authenticate(username, pw) if username else None
-        if user is None and not username and self.auth.check_password(pw):
-            user = {"username": "admin", "role": "admin"}
-        if user is None and username.lower() == "admin" and self.auth.check_password(pw):
-            user = {"username": "admin", "role": "admin"}
 
         if user:
             _clear_failures(ip)
@@ -653,6 +662,7 @@ class Handler(BaseHTTPRequestHandler):
     # ── Webhooks ─────────────────────────────────────────────────────────────
 
     def _webhook_create(self):
+        if not self._require_role("admin"): return
         body, err = self._read_json()
         if err: return
         name        = str(body.get("name", "")).strip()
@@ -670,6 +680,7 @@ class Handler(BaseHTTPRequestHandler):
         self._json(self.wdb.create(name, wtype, url, severities, enabled, allow_local), 201)
 
     def _webhook_update(self, wid: int):
+        if not self._require_role("admin"): return
         if not self.wdb.get(wid):
             self._json({"error": "Not found"}, 404); return
         body, err = self._read_json()
@@ -677,6 +688,7 @@ class Handler(BaseHTTPRequestHandler):
         self._json(self.wdb.update(wid, **body))
 
     def _webhook_test(self, wid: int):
+        if not self._require_role("admin"): return
         wh = self.wdb.get(wid)
         if not wh:
             self._json({"error": "Not found"}, 404); return
@@ -724,7 +736,13 @@ class Handler(BaseHTTPRequestHandler):
         if err: return
         if "password" in body:
             pw = str(body.pop("password", "")).strip()
-            if pw: self.um.set_password(uid, pw)
+            if pw:
+                self.um.set_password(uid, pw)
+                # A password reset ends the user's other sessions. An admin
+                # changing their own password stays signed in on this browser.
+                me   = self._session()
+                keep = self._token() if me and me["username"].lower() == user["username"].lower() else None
+                self.auth.revoke_user_sessions(user["username"], keep_token=keep)
         if body.get("role") and body["role"] != "admin":
             if user["role"] == "admin" and self.um.count_admins() <= 1:
                 self._json({"error": "Cannot demote the last admin"}, 400); return
@@ -734,6 +752,13 @@ class Handler(BaseHTTPRequestHandler):
                     self._json({"error": "Cannot disable the last admin"}, 400); return
         updated = self.um.update(uid, **{k: v for k, v in body.items()
                                          if k in ("role", "enabled", "username")})
+        # Role and enabled changes apply on the next request (get_session reads
+        # the users table). Disabling also revokes, so re-enabling later does
+        # not revive old tokens; a rename moves sessions with the user.
+        if updated and not updated["enabled"]:
+            self.auth.revoke_user_sessions(updated["username"])
+        if updated and updated["username"] != user["username"]:
+            self.auth.rename_user_sessions(user["username"], updated["username"])
         self._json(updated)
 
     def _user_delete(self, uid: int):
@@ -747,6 +772,9 @@ class Handler(BaseHTTPRequestHandler):
         if s and s["username"].lower() == user["username"].lower():
             self._json({"error": "Cannot delete your own account"}, 400); return
         self.um.delete(uid)
+        # Sessions are keyed by username: revoke them so a future account with
+        # the same name cannot inherit them.
+        self.auth.revoke_user_sessions(user["username"])
         self._json({"deleted": uid})
 
     # ── SSE ──────────────────────────────────────────────────────────────────
@@ -762,6 +790,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Robots-Tag",           "noindex, nofollow")
         self.end_headers()
 
+        token  = self._token()
         cid, q = self.registry.add()
         try:
             self.wfile.write(f"event: ping\ndata: {int(time.time())}\n\n".encode())
@@ -773,6 +802,10 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 msg = q.get(timeout=PING_EVERY)
             except Empty:
+                # Re-check the session at each keep-alive so a revoked session,
+                # or a disabled/deleted user, stops receiving live events.
+                if self.auth.get_session(token) is None:
+                    break
                 msg = f"event: ping\ndata: {int(time.time())}\n\n"
             try:
                 self.wfile.write(msg.encode())
@@ -781,10 +814,16 @@ class Handler(BaseHTTPRequestHandler):
                 break
 
         self.registry.remove(cid)
+        # The stream has no Content-Length, so the connection cannot be reused.
+        # Without this, the "Connection: keep-alive" header above makes
+        # http.server wait for another request on the socket, and a
+        # server-ended stream (revoked session) would hang instead of closing.
+        self.close_connection = True
 
     # ── Skin preference ───────────────────────────────────────────────────────
 
-    _VALID_SKINS = {"original", "chronicles", "mosaic", "seal"}
+    _VALID_SKINS  = {"original", "chronicles", "mosaic", "seal"}
+    _default_skin = "original"   # overridden by --skin (server.py)
 
     def _get_skin(self):
         """GET /skin — return the server-stored skin preference for this session's user."""
@@ -794,7 +833,7 @@ class Handler(BaseHTTPRequestHandler):
         row = self.auth._conn().execute(
             "SELECT value FROM auth WHERE key = ?", (key,)
         ).fetchone()
-        skin = row[0] if row else "original"
+        skin = row[0] if row else self._default_skin
         self._json({"skin": skin})
 
     def _set_skin(self):
@@ -827,15 +866,53 @@ class Handler(BaseHTTPRequestHandler):
         enabled  = body.get("enabled")
         if enabled is not None:
             enabled = bool(enabled)
-        updated = self.ai_db.update_settings(
-            provider=provider,
-            api_key=api_key if api_key is not None else None,
-            enabled=enabled,
-        )
+        try:
+            updated = self.ai_db.update_settings(
+                provider=provider,
+                api_key=api_key if api_key is not None else None,
+                enabled=enabled,
+                model=body.get("model"),   # None = unchanged, "" = provider default
+            )
+        except ValueError as exc:
+            self._json({"error": str(exc)}, 400); return
+        _ai.CACHE.clear()   # new provider/key/model → regenerate summaries on demand
         self._json(updated)
 
+    def _ai_models(self):
+        """POST /ai-models {provider, api_key?} — list the models the provider
+        offers to this key, so new models can be picked without an update.
+        Admin only. Uses the key typed in the form if given (it is NOT stored),
+        otherwise the saved key when it belongs to that provider."""
+        if not self._require_role("admin"): return
+        body, err = self._read_json()
+        if err: return
+        provider = str(body.get("provider") or "")
+        if provider not in _ai.PROVIDERS:
+            self._json({"error": "Unknown provider"}, 400); return
+        key = str(body.get("api_key") or "").strip()
+        if not key:
+            s = self.ai_db.get_settings()
+            if s["provider"] == provider:
+                key = s["api_key"]
+        if not key:
+            self._json({"error": f"Enter the {_ai.PROVIDERS[provider]} API key to load its models"}, 400)
+            return
+        try:
+            models = _ai.list_models(provider, key)
+        except Exception as exc:
+            log.warning("AI model list error (%s): %s", provider, exc)
+            self._json({"error": str(exc)}, 502); return
+        self._json({"provider": provider, "models": models})
+
     def _ai_explain(self):
-        """POST /ai-explain {alert:{...}} — generate executive summary via AI."""
+        """POST /ai-explain {alert:{id,...}} — executive summary for a STORED alert.
+
+        The client only identifies the alert; the prompt is built from the
+        database copy, and summaries are cached per alert id (ai_explain.CACHE).
+        So every open tab/user shares one provider call per alert, and the
+        endpoint cannot be used to send arbitrary text to the paid provider or
+        to poison the summary other users see. Available to all roles, as before.
+        """
         body, err = self._read_json()
         if err: return
         alert = body.get("alert", {})
@@ -846,12 +923,19 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": "AI explanation is disabled"}, 403); return
         if not settings["api_key"]:
             self._json({"error": "No API key configured"}, 400); return
+        aid = alert.get("id") if isinstance(alert, dict) else None
+        if not isinstance(aid, str) or not aid:
+            self._json({"error": "alert.id is required"}, 400); return
+        stored = self.db.get_alert(aid)
+        if not stored:
+            self._json({"error": "Alert not found"}, 404); return
         try:
-            text = _ai.fetch_explanation(
-                alert    = alert,
+            text = _ai.CACHE.get_or_fetch(aid, lambda: _ai.fetch_explanation(
+                alert    = stored,
                 provider = settings["provider"],
                 api_key  = settings["api_key"],
-            )
+                model    = settings["model"],
+            ))
             self._json({"explanation": text})
         except Exception as exc:
             log.warning("AI explain error: %s", exc)
@@ -872,6 +956,7 @@ class Handler(BaseHTTPRequestHandler):
         t = _th.Thread(
             target=replay_thread,
             args=(eve_path, self.db, self.dns_db),
+            kwargs={"sup_db": self.sup_db},   # replay honours suppression rules
             daemon=True,
         )
         t.start()

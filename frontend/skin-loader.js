@@ -60,9 +60,20 @@
   const ASSET_VERSION = '__HEIMDALL_VERSION__';
 
   /* ── Skin resolution ─────────────────────────────────────────────────── */
-  function currentSkinId() {
+  // A skin chosen in this browser (localStorage) always wins. Otherwise ask
+  // the server: GET /skin returns this user's saved choice, or the --skin
+  // default from heimdall.conf. Any failure falls back to the built-in default.
+  async function resolveSkinId() {
     const saved = localStorage.getItem(STORAGE_KEY);
-    return SKINS.find(s => s.id === saved) ? saved : DEFAULT_ID;
+    if (SKINS.find(s => s.id === saved)) return saved;
+    try {
+      const r = await fetch('/skin', { credentials: 'same-origin' });
+      if (r.ok) {
+        const d = await r.json();
+        if (SKINS.find(s => s.id === d.skin)) return d.skin;
+      }
+    } catch (e) { /* network error — use the built-in default */ }
+    return DEFAULT_ID;
   }
 
   function skinById(id) {
@@ -300,7 +311,7 @@
 
   /* ── Bootstrap ────────────────────────────────────────────────────────── */
   async function boot() {
-    const skinId = currentSkinId();
+    const skinId = await resolveSkinId();
     const base   = `/frontend/skins/${skinId}/`;
 
     // Inject CSS first — page won't flash unstyled when JS mounts

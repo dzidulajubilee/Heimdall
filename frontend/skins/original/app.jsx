@@ -2478,6 +2478,10 @@ function ThreatIntelView({ role }) {
 function AIExplainView({ role }) {
   const [settings,     setSettings]     = useState({ provider:'openai', enabled:false, api_key_set:false });
   const [apiKeyInput,  setApiKeyInput]  = useState('');
+  const [modelInput,   setModelInput]   = useState('');   // '' = provider default
+  const [modelList,    setModelList]    = useState([]);
+  const [modelsBusy,   setModelsBusy]   = useState(false);
+  const [modelsMsg,    setModelsMsg]    = useState('');
   const [loading,      setLoading]      = useState(true);
   const [saving,       setSaving]       = useState(false);
   const [saved,        setSaved]        = useState(false);
@@ -2485,13 +2489,14 @@ function AIExplainView({ role }) {
   const isAdmin = role === 'admin';
 
   useEffect(() => {
-    fetch('/ai-config').then(r=>r.json()).then(d=>{ setSettings(d); setLoading(false); }).catch(()=>setLoading(false));
+    fetch('/ai-config').then(r=>r.json()).then(d=>{ setSettings(d); setModelInput((d.models||{})[d.provider]||''); setLoading(false); }).catch(()=>setLoading(false));
   }, []);
 
   async function save() {
     setSaving(true); setErr(''); setSaved(false);
     const body = { provider: settings.provider, enabled: settings.enabled };
     if (apiKeyInput.trim()) body.api_key = apiKeyInput.trim();
+    body.model = modelInput.trim();   // '' = provider default
     try {
       const r = await fetch('/ai-config', { method:'PUT',
         headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
@@ -2499,15 +2504,32 @@ function AIExplainView({ role }) {
       if (!r.ok) { setErr(d.error||'Save failed'); return; }
       setSettings({ ...d, api_key_set: d.api_key_set });
       setApiKeyInput('');
+      setModelInput((d.models||{})[d.provider]||'');
       setSaved(true);
       setTimeout(()=>setSaved(false), 2500);
     } catch { setErr('Network error'); }
     finally { setSaving(false); }
   }
 
+  async function loadModels() {
+    setModelsBusy(true); setModelsMsg('');
+    const body = { provider: settings.provider };
+    if (apiKeyInput.trim()) body.api_key = apiKeyInput.trim();   // used for this lookup only
+    try {
+      const r = await fetch('/ai-models', { method:'POST',
+        headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) });
+      const d = await r.json();
+      if (!r.ok) { setModelList([]); setModelsMsg(d.error || 'Could not load models'); return; }
+      const list = d.models || [];
+      setModelList(list);
+      setModelsMsg(list.length + ' models available: pick one from the list or type any model ID.');
+    } catch { setModelsMsg('Network error'); }
+    finally { setModelsBusy(false); }
+  }
+
   const PROVIDERS = [
     { id:'openai',    label:'OpenAI',    hint:'gpt-4o-mini' },
-    { id:'anthropic', label:'Anthropic', hint:'claude-3-5-haiku' },
+    { id:'anthropic', label:'Anthropic', hint:'claude-haiku-4-5' },
     { id:'deepseek',  label:'DeepSeek',  hint:'deepseek-chat' },
   ];
 
@@ -2579,10 +2601,11 @@ function AIExplainView({ role }) {
               <select
                 disabled={!isAdmin}
                 value={settings.provider}
-                onChange={e=>setSettings(s=>({...s, provider:e.target.value}))}
+                onChange={e=>{ const p = e.target.value; setSettings(s=>({...s, provider:p}));
+                  setModelInput((settings.models||{})[p]||''); setModelList([]); setModelsMsg(''); }}
                 style={{ ...inp, cursor: isAdmin ? 'pointer' : 'default' }}>
                 {PROVIDERS.map(p=>(
-                  <option key={p.id} value={p.id}>{p.label} ({p.hint})</option>
+                  <option key={p.id} value={p.id}>{p.label}</option>
                 ))}
               </select>
             </div>
@@ -2602,6 +2625,38 @@ function AIExplainView({ role }) {
                 onChange={e=>setApiKeyInput(e.target.value)}
                 style={{ ...inp, cursor: isAdmin ? 'text' : 'default' }}
               />
+            </div>
+          </div>
+
+          {/* Model — any ID the provider accepts, including models released after this build */}
+          <div style={{ marginBottom:14 }}>
+            <label style={lbl}>Model</label>
+            <div style={{ display:'flex', gap:8 }}>
+              <input
+                list="heimdall-ai-models"
+                disabled={!isAdmin}
+                spellCheck={false}
+                placeholder={'Default: ' + ((settings.default_models||{})[settings.provider] || '')}
+                value={modelInput}
+                onChange={e=>setModelInput(e.target.value)}
+                style={{ ...inp, flex:1, cursor: isAdmin ? 'text' : 'default' }}
+              />
+              {isAdmin && (
+                <button onClick={loadModels} disabled={modelsBusy} style={{ padding:'6px 14px',
+                  flexShrink:0, border:'1px solid var(--ln)', borderRadius:'var(--radius-sm,4px)',
+                  background:'transparent', color:'var(--tx2)', fontSize:12,
+                  cursor:modelsBusy?'wait':'pointer' }}>
+                  {modelsBusy ? 'Loading…' : 'Load models'}
+                </button>
+              )}
+            </div>
+            <datalist id="heimdall-ai-models">
+              {modelList.map(m=>(
+                <option key={m.id} value={m.id}>{m.name !== m.id ? m.name : ''}</option>
+              ))}
+            </datalist>
+            <div style={{ fontSize:11, color:'var(--tx3)', marginTop:6 }}>
+              {modelsMsg || 'Leave blank to use the default. Load models asks the provider which models your key can use, so newly released models can be picked without updating Heimdall. Any model ID can also be typed in.'}
             </div>
           </div>
 
@@ -2652,7 +2707,7 @@ function AIExplainView({ role }) {
                 <div style={{ width:8, height:8, borderRadius:'50%', flexShrink:0,
                   background: settings.provider===p.id ? 'var(--accent)' : 'var(--tx3)' }}/>
                 <span style={{ fontFamily:'var(--mono)', fontSize:11, color:'var(--tx1)' }}>{p.label}</span>
-                <span style={{ fontFamily:'var(--mono)', fontSize:11, color:'var(--tx3)' }}>→ {p.hint}</span>
+                <span style={{ fontFamily:'var(--mono)', fontSize:11, color:'var(--tx3)' }}>→ {(settings.models||{})[p.id] || (settings.default_models||{})[p.id] || p.hint}</span>
                 {settings.provider===p.id && (
                   <span style={{ marginLeft:'auto', fontSize:9, fontFamily:'var(--mono)',
                     textTransform:'uppercase', letterSpacing:'.07em',

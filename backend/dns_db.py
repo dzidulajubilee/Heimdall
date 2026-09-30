@@ -25,7 +25,7 @@ log = logging.getLogger("heimdall.dns_db")
 
 # Pre-compiled timestamp normalisation — mirrors AlertDB._to_epoch
 _RE_USEC = re.compile(r"\.\d+")
-_RE_TZ   = re.compile(r"\+0000$|Z$")
+_RE_TZ   = re.compile(r"([+-]\d{2})(\d{2})$|Z$")   # ±HHMM → ±HH:MM (Python 3.10)
 
 
 class DNSDB:
@@ -84,7 +84,7 @@ class DNSDB:
     def _to_epoch(self, ts: str) -> float:
         try:
             ts = _RE_USEC.sub("", ts)
-            ts = _RE_TZ.sub("+00:00", ts)
+            ts = _RE_TZ.sub(lambda m: f"{m.group(1)}:{m.group(2)}" if m.group(1) else "+00:00", ts)
             return datetime.fromisoformat(ts).timestamp()
         except (ValueError, TypeError):
             return time.time()

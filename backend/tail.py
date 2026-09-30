@@ -288,12 +288,13 @@ def tail_thread(path: str, db, dns_db, registry, wdb=None, sup_db=None):
 
 _replay_lock  = threading.Lock()
 _replay_state = {
-    "running":   False,
-    "inserted":  0,
-    "skipped":   0,
-    "total":     0,
-    "error":     None,
-    "done":      False,
+    "running":    False,
+    "inserted":   0,
+    "skipped":    0,
+    "suppressed": 0,
+    "total":      0,
+    "error":      None,
+    "done":       False,
 }
 
 def get_replay_status() -> dict:
@@ -304,29 +305,35 @@ def _set_replay(field: str, value):
     with _replay_lock:
         _replay_state[field] = value
 
-def replay_thread(path: str, db, dns_db):
+def replay_thread(path: str, db, dns_db, sup_db=None):
     """
     Read eve.json from the very beginning and insert any events
     not already in the database. Runs as a daemon thread so the
     dashboard stays usable during replay.
+
+    Suppression rules (sup_db.is_suppressed) are applied to alerts exactly as
+    in tail_thread, so replay never re-ingests suppressed alerts. Suppressed
+    alerts are counted in both "skipped" (for existing UIs) and "suppressed".
     """
     with _replay_lock:
         if _replay_state["running"]:
             return   # already in progress
         _replay_state.update({"running": True, "inserted": 0,
-                               "skipped": 0,   "total":    0,
-                               "error":   None, "done":    False})
+                               "skipped": 0,   "suppressed": 0,
+                               "total":   0,   "error":    None,
+                               "done":    False})
     log.info("Replay started — reading %s from beginning.", path)
-    inserted = skipped = total = 0
+    inserted = skipped = suppressed = total = 0
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             for raw_line in f:
                 total += 1
                 if total % 10000 == 0:
                     with _replay_lock:
-                        _replay_state["total"]    = total
-                        _replay_state["inserted"] = inserted
-                        _replay_state["skipped"]  = skipped
+                        _replay_state["total"]      = total
+                        _replay_state["inserted"]   = inserted
+                        _replay_state["skipped"]    = skipped
+                        _replay_state["suppressed"] = suppressed
                 etype, parsed = parse_eve_line(raw_line)
                 if etype is None:
                     skipped += 1
@@ -334,6 +341,9 @@ def replay_thread(path: str, db, dns_db):
                 if etype == "alert":
                     if db.alert_exists(parsed["id"]):
                         skipped += 1
+                    elif sup_db is not None and sup_db.is_suppressed(parsed):
+                        skipped    += 1
+                        suppressed += 1
                     else:
                         db.insert(parsed)
                         inserted += 1
@@ -349,8 +359,8 @@ def replay_thread(path: str, db, dns_db):
                     inserted += 1
                 else:
                     skipped += 1
-        log.info("Replay done — %d lines read, %d inserted, %d skipped.",
-                 total, inserted, skipped)
+        log.info("Replay done — %d lines read, %d inserted, %d skipped "
+                 "(%d suppressed by rule).", total, inserted, skipped, suppressed)
     except Exception as exc:
         log.error("Replay error: %s", exc)
         with _replay_lock:
@@ -358,11 +368,12 @@ def replay_thread(path: str, db, dns_db):
     finally:
         with _replay_lock:
             _replay_state.update({
-                "running":  False,
-                "inserted": inserted,
-                "skipped":  skipped,
-                "total":    total,
-                "done":     True,
+                "running":    False,
+                "inserted":   inserted,
+                "skipped":    skipped,
+                "suppressed": suppressed,
+                "total":      total,
+                "done":       True,
             })
 
 

@@ -22,7 +22,15 @@ log = logging.getLogger("heimdall.db")
 # Used in _to_epoch() on every event ingested — compiling once at module load
 # avoids repeated re.compile() overhead on the hottest path in the codebase.
 _RE_USEC = re.compile(r"\.\d+")           # strip fractional seconds
-_RE_TZ   = re.compile(r"\+0000$|Z$")     # normalise +0000 / Z → +00:00
+# Normalise the UTC offset to ±HH:MM: Suricata writes ±HHMM (e.g. +0100),
+# which datetime.fromisoformat() only accepts from Python 3.11. On 3.10 any
+# non-UTC offset used to fail and fall back to the ingestion time.
+_RE_TZ   = re.compile(r"([+-]\d{2})(\d{2})$|Z$")
+
+
+def _norm_tz(ts: str) -> str:
+    """'...+0100' → '...+01:00', '...Z' → '...+00:00'; others unchanged."""
+    return _RE_TZ.sub(lambda m: f"{m.group(1)}:{m.group(2)}" if m.group(1) else "+00:00", ts)
 
 # Tables that are allowed to appear in dynamically-built SQL statements.
 # Prevents any future caller from accidentally injecting an untrusted string.
@@ -138,7 +146,7 @@ class AlertDB:
         """
         try:
             ts = _RE_USEC.sub("", ts)             # drop microseconds
-            ts = _RE_TZ.sub("+00:00", ts)          # normalise timezone
+            ts = _norm_tz(ts)                      # normalise timezone
             return datetime.fromisoformat(ts).timestamp()
         except (ValueError, TypeError):
             return time.time()
@@ -199,6 +207,15 @@ class AlertDB:
                 "SELECT 1 FROM alerts WHERE id=? LIMIT 1", (alert_id,)
             ).fetchone()
         )
+
+    def get_alert(self, alert_id: str) -> dict | None:
+        """Return one stored alert (without raw_json), or None.
+        Used by /ai-explain so prompts are built from trusted, stored data."""
+        row = self._conn().execute(
+            """SELECT id,ts,src_ip,src_port,dst_ip,dst_port,proto,iface,flow_id,
+                      sig_id,sig_msg,category,severity,action
+               FROM alerts WHERE id=?""", (alert_id,)).fetchone()
+        return dict(row) if row else None
 
     def fetch_recent(self, days=None, limit=300, offset=0):
         """Return (alerts_list, total_count). Paginated with LIMIT/OFFSET."""
@@ -336,8 +353,8 @@ class AlertDB:
         dur = 0.0
         try:
             # datetime is now imported at module level
-            t1  = datetime.fromisoformat(f.get("start", "").replace("+0000", "+00:00"))
-            t2  = datetime.fromisoformat(f.get("end",   "").replace("+0000", "+00:00"))
+            t1  = datetime.fromisoformat(_norm_tz(f.get("start", "")))
+            t2  = datetime.fromisoformat(_norm_tz(f.get("end",   "")))
             dur = (t2 - t1).total_seconds()
         except Exception:
             pass
@@ -473,11 +490,11 @@ class AlertDB:
         counts["http"]   = cur.rowcount
         c.commit()
         self.invalidate_count_cache()
-        # DNS is a separate database
-        dc = dns_db._conn()
-        cur = dc.execute("DELETE FROM dns_queries")
-        counts["dns"] = cur.rowcount
-        dc.commit()
+        # DNS is a separate database. Delegate to DNSDB.clear() so the table
+        # name lives in one place (it is dns_events; the previous hard-coded
+        # "dns_queries" did not exist and made this endpoint fail with a 500
+        # after alerts/flows/http had already been deleted).
+        counts["dns"] = dns_db.clear()
         total = counts["alerts"] + counts["flows"] + counts["http"] + counts["dns"]
         log.info("flush_all_records: deleted %d total rows (%s).", total,
                  ", ".join(f"{v} {k}" for k, v in counts.items()))

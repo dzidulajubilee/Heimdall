@@ -6,6 +6,7 @@ Sessions carry username and role, checked on every protected request.
 
 import logging
 import secrets
+import sqlite3
 import time
 
 from config         import SESSION_TTL
@@ -81,7 +82,8 @@ class AuthManager:
         return row[0] if row else None
 
     def check_password(self, password: str) -> bool:
-        """Emergency fallback: checks against the single stored password."""
+        """Check against the legacy single stored password.
+        Not used for login since 1.4.4 (see Handler._do_login)."""
         stored = self.get_hash()
         return bool(stored and verify_password(password, stored))
 
@@ -108,11 +110,17 @@ class AuthManager:
     def get_session(self, token: str) -> dict | None:
         """
         Return session dict {token, username, role} if valid,
-        or None if missing / expired.
+        or None if missing / expired / its user is gone or disabled.
+
+        Since 1.4.4 the session is checked against the users table on every
+        call, and username/role come from the user's CURRENT row — so disabling,
+        deleting or demoting a user takes effect on their next request instead
+        of when the 7-day session expires. Fails closed if the lookup errors.
         """
         if not token:
             return None
-        row = self._conn().execute(
+        c   = self._conn()
+        row = c.execute(
             "SELECT token, expires_at, username, role "
             "FROM sessions WHERE token = ?",
             (token,),
@@ -120,19 +128,74 @@ class AuthManager:
         if not row:
             return None
         if time.time() > row["expires_at"]:
-            self._conn().execute(
-                "DELETE FROM sessions WHERE token = ?", (token,)
-            )
-            self._conn().commit()
+            c.execute("DELETE FROM sessions WHERE token = ?", (token,))
+            c.commit()
             return None
-        return {"token": row["token"], "username": row["username"],
-                "role": row["role"]}
+        try:
+            user = c.execute(
+                "SELECT username, role, enabled FROM users "
+                "WHERE username = ? COLLATE NOCASE",
+                (row["username"],),
+            ).fetchone()
+        except sqlite3.Error as e:
+            log.warning("Session user lookup failed (denying): %s", e)
+            return None
+        if not user or not user["enabled"]:
+            c.execute("DELETE FROM sessions WHERE token = ?", (token,))
+            c.commit()
+            return None
+        return {"token": row["token"], "username": user["username"],
+                "role": user["role"]}
 
     def revoke_session(self, token: str):
         self._conn().execute(
             "DELETE FROM sessions WHERE token = ?", (token,)
         )
         self._conn().commit()
+
+    def revoke_user_sessions(self, username: str,
+                             keep_token: str | None = None) -> int:
+        """Delete every session belonging to username (case-insensitive),
+        optionally keeping one token (the caller's own browser)."""
+        c = self._conn()
+        if keep_token:
+            cur = c.execute(
+                "DELETE FROM sessions WHERE username = ? COLLATE NOCASE "
+                "AND token != ?", (username, keep_token))
+        else:
+            cur = c.execute(
+                "DELETE FROM sessions WHERE username = ? COLLATE NOCASE",
+                (username,))
+        c.commit()
+        if cur.rowcount:
+            log.info("Revoked %d session(s) for user %r.", cur.rowcount, username)
+        return cur.rowcount
+
+    def rename_user_sessions(self, old: str, new: str):
+        """Keep a renamed user's sessions attached to that user."""
+        c = self._conn()
+        c.execute("UPDATE sessions SET username = ? "
+                  "WHERE username = ? COLLATE NOCASE", (new, old))
+        c.commit()
+
+    def purge_orphaned(self) -> int:
+        """Startup hygiene: delete sessions whose user no longer exists or is
+        disabled. Sessions are keyed by username, so without this a later
+        account created with the same name (or re-enabling the account) could
+        revive tokens issued before 1.4.4, which never revoked them."""
+        c = self._conn()
+        try:
+            cur = c.execute(
+                "DELETE FROM sessions WHERE NOT EXISTS ("
+                "  SELECT 1 FROM users u WHERE u.username = sessions.username "
+                "  COLLATE NOCASE AND u.enabled = 1)")
+        except sqlite3.Error as e:
+            log.warning("Orphaned-session purge skipped: %s", e)
+            return 0
+        c.commit()
+        if cur.rowcount:
+            log.info("Removed %d session(s) of deleted or disabled users.", cur.rowcount)
+        return cur.rowcount
 
     def purge_expired(self):
         cur = self._conn().execute(

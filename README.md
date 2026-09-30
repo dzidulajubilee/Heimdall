@@ -60,7 +60,7 @@ Heimdall IDS is a lightweight web dashboard that sits on top of [Suricata](https
 ## Installation
 
 ```bash
-sudo apt install ./heimdall-ids_1.4.2_all.deb
+sudo apt install ./heimdall-ids_1.4.4_all.deb
 ```
 
 That's it. The installer will:
@@ -106,6 +106,8 @@ Log in with `admin` and the generated password shown during install. The passwor
 sudo heimdall --password <yournewpassword>
 ```
 
+This is also the lock-out recovery path: it always leaves a working `admin` login with the admin role — creating the `admin` user if it was deleted, or re-enabling and re-promoting it if it was disabled or demoted — and ends every existing `admin` session. Since v1.4.4 the original install password stops working as soon as the admin password is changed.
+
 ---
 
 ## Configuration
@@ -117,15 +119,21 @@ sudo nano /etc/heimdall/heimdall.conf
 sudo systemctl restart heimdall
 ```
 
+The file holds one option per line, written exactly as on the command line (for example `--port 8765` or `--retain-days=30`); `#` starts a comment. The `heimdall` command always reads it (it passes `--config /etc/heimdall/heimdall.conf`), and options given on the command line override the file. Unknown options in the file are ignored with a warning in the journal; an invalid value (e.g. `--port abc`) stops startup and names the file and line. Option values are never written to the log.
+
+> **Upgrading from 1.4.3 or earlier:** before v1.4.4 this file was never read. Any option you had already uncommented takes effect after the upgrade — review the file first.
+
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--eve <path>` | `/var/log/suricata/eve.json` | Path to Suricata `eve.json` |
+| `--host <addr>` | `0.0.0.0` | Bind address |
 | `--port <n>` | `8765` | Listening port |
 | `--retain-days <n>` | `90` | Alert and flow retention in days |
-| `--skin <name>` | `original` | Default skin: `original`, `chronicles`, `mosaic`, `seal` |
-| `--ai-provider <name>` | `openai` | AI provider: `openai`, `anthropic`, `deepseek` |
-| `--ai-key <key>` | _(none)_ | API key for AI explanation (UI setting takes precedence) |
-| `--password <pw>` | — | Set or reset the admin password |
+| `--skin <name>` | `original` | Default skin for users who have not picked one: `original`, `chronicles`, `mosaic`, `seal`. A skin chosen with the switcher still wins. |
+| `--ai-provider <name>` | `openai` | AI provider (`openai`, `anthropic`, `deepseek`), used until AI settings are saved in the UI |
+| `--ai-key <key>` | _(none)_ | AI API key, used while no key is stored via the UI. Never copied into the database. Prefer the config file over the command line (command lines are visible in `ps`). |
+| `--config <file>` | — | Read options from a file (command line only) |
+| `--password <pw>` | — | Set or reset the admin password, then exit (command line only) |
 
 **Service management:**
 
@@ -160,11 +168,11 @@ Heimdall is a single self-contained Python process with no external runtime depe
 │  │  suppression │   │  events.db     config.db     dns.db      │    │
 │  │  rules       │   │  ─────────     ─────────     ──────      │    │
 │  │              │   │  alerts        users          dns        │    │
-│  │  Broadcasts  │   │  flows         sessions       queries    │    │
+│  │  Broadcasts  │   │  flows         sessions       events     │    │
 │  │  to SSE      │   │  http_events   webhooks                  │    │
 │  │              │   │  alert_notes   suppression               │    │
 │  │  Dispatches  │   │  alert_activity threat_intel             │    │
-│  │  webhooks    │   │  alert_meta    ai_cache                  │    │
+│  │  webhooks    │   │  alert_meta    ai_settings               │    │
 │  └──────────────┘   └──────────────────────────────────────────┘    │
 │                                                                     │
 │  ┌────────────────┐  ┌───────────────┐  ┌──────────────────────┐    │
@@ -217,7 +225,7 @@ Real-time alert list with severity badges, source/destination IPs, protocol, and
 
 ### Alert Triage
 Click any alert to open the detail panel:
-- **Status** — mark as `new`, `open`, `closed`, or `false-positive`
+- **Status** — mark as `acknowledged`, `investigating`, or `closed` (or clear the status)
 - **Analyst notes** — add timestamped notes visible to the whole team
 - **Activity log** — full audit trail of every status change and note
 
@@ -251,8 +259,10 @@ If Heimdall was offline while Suricata kept running, the **Replay** button re-re
 | Role | Permissions |
 |------|-------------|
 | **Admin** | Everything — users, webhooks, settings, AI config, suppression, flush/replay |
-| **Analyst** | Alert triage, threat intel create/edit, suppression create/edit |
-| **Viewer** | Read-only access to all views |
+| **Analyst** | Alert triage (status, notes, bulk status), threat intel create/edit/import |
+| **Viewer** | Read-only access to all views, including AI summaries |
+
+Roles are enforced at the API level and checked against the user's current account on every request: disabling, deleting or changing the role of a user takes effect immediately, including on their open live-alert stream.
 
 ### Data Management
 Per-table **Clear All** buttons let admins flush alerts, flows, or DNS records independently. After a flush, **Replay** can restore alert history from `eve.json`.
@@ -282,26 +292,29 @@ Heimdall can automatically generate a short, actionable executive summary for ev
 
 1. Go to the **AI Explain** tab in the navigation
 2. Choose your provider and paste your API key
-3. Toggle **AI Explanation** on
+3. Optionally choose a **Model**. Click **Load models** to ask the provider which models your key can use — newly released models appear there without a Heimdall update — or type any model ID. Leave it blank to use the provider's default. Each provider remembers its own model.
+4. Toggle **AI Explanation** on and click **Save Settings**
 
 ### How It Works
 
 - Every new alert arriving via SSE is automatically submitted to the AI provider in the background
-- The summary is cached per alert — by the time you open the Explain dialog, it is ready
+- Summaries are generated **once per alert on the server** and shared by every user and browser tab; simultaneous requests for the same alert wait for a single provider call. The cache lives in memory (last 2,000 alerts) and is cleared on restart or when AI settings change
+- The prompt is built from the alert as stored in the database — the browser only says *which* alert, so the endpoint cannot be used to send arbitrary text to the provider
 - Open any alert → click **Explain** → open the **AI Summary** tab
-- Use **Refresh** to regenerate if needed
 
 ### Providers
 
-| Provider | Model | Notes |
-|----------|-------|-------|
-| OpenAI | `gpt-4o-mini` | Default. Low cost, ~1–2s latency. |
-| Anthropic | `claude-3-5-haiku-20241022` | Consistent structured output. ~1–2s latency. |
+| Provider | Default model | Notes |
+|----------|---------------|-------|
+| OpenAI | `gpt-4o-mini` | Default provider. Low cost, ~1–2s latency. |
+| Anthropic | `claude-haiku-4-5-20251001` | Anthropic's documented successor to `claude-3-5-haiku-20241022`, which was retired in February 2026. |
 | DeepSeek | `deepseek-chat` | Very low cost. ~2–4s latency. |
+
+Any model the provider offers can be selected instead of the default (see *Setup*). **Load models** calls the provider's own model-list API (`/v1/models` for OpenAI and Anthropic, `/models` for DeepSeek) from the Heimdall server with the saved key, or with a key typed into the form, which is used for that lookup only and not stored. It is admin-only and, like AI Explain itself, needs outbound HTTPS to the provider. Summaries are capped at 1,024 output tokens so that reasoning models have room to answer; ordinary models stop far earlier.
 
 ### API Key Storage
 
-API keys are stored in the config database with XOR obfuscation and are **never** returned to the browser. The UI only shows whether a key has been set. Keys can also be set in `heimdall.conf` — the UI setting takes precedence.
+API keys are stored in the config database with XOR obfuscation and are **never** returned to the browser. The UI only shows whether a key has been set. Keys can also be set in `heimdall.conf` (`--ai-key`) — a key saved in the UI takes precedence, and the config-file key is never copied into the database.
 
 ---
 
@@ -316,14 +329,16 @@ Push alert notifications to external tools whenever a matching alert arrives.
 
 ### Creating a Webhook
 
-Go to **Settings → Webhooks → Add Webhook**. Configure:
+Go to **Settings → Webhooks → Add Webhook** (admins only — webhook URLs contain secrets, so all webhook endpoints require the Admin role). Configure:
 - **Name** — label for the webhook card
 - **Type** — Slack, Discord, or Generic
 - **URL** — destination endpoint
 - **Severity filter** — only fire for selected severity levels
 - **Allow local / private URLs** — enable for LAN-hosted tools like n8n
 
-> **n8n / LAN tools:** Enable "Allow local / private URLs" for any webhook pointing to a private-IP destination. By default Heimdall blocks RFC-1918 and loopback addresses to prevent SSRF. This toggle opts that webhook in explicitly. A yellow **local** badge appears on the card as a reminder.
+> **n8n / LAN tools:** Enable "Allow local / private URLs" for any webhook pointing to a private-IP destination. By default Heimdall blocks RFC-1918, loopback, link-local, `0.0.0.0/8`, carrier-grade NAT / Tailscale (`100.64.0.0/10`) and IPv6 private/loopback/link-local addresses (including IPv4-mapped forms) to prevent SSRF. This toggle opts that webhook in explicitly. A yellow **local** badge appears on the card as a reminder.
+>
+> HTTP redirects are never followed — point each webhook at its final URL.
 
 ### Behaviour
 - Deliveries are queued and processed in a background thread — they never block alert ingestion
@@ -346,15 +361,16 @@ Go to **Settings → Webhooks → Add Webhook**. Configure:
 | Referrer leakage | `Referrer-Policy: no-referrer` on every response |
 | CSRF defence | `SameSite=Strict` session cookie + Origin/Referer header validation on all write requests |
 | Source code exposure | `.jsx` and `.py` files return HTTP 403 from the static handler |
-| Webhook SSRF | RFC-1918/loopback destinations blocked by default; opt-in per webhook |
+| Webhook SSRF | Webhooks are admin-only; private, loopback, link-local, CGNAT and IPv4-mapped destinations blocked by default (opt-in per webhook); redirects not followed |
 | API key storage | XOR-obfuscated in DB; never returned to browser |
 | SQL injection | Parameterised queries throughout; no string interpolation into SQL |
-| Session security | PBKDF2-SHA256 passwords (260,000 iterations); indexed sessions with 7-day expiry |
+| Session security | PBKDF2-SHA256 passwords (260,000 iterations); indexed sessions with 7-day expiry, re-validated against the user's current account on every request; password reset, disable and delete revoke sessions |
 | Body size limits | Request bodies capped at 4 MB; bulk alert operations capped at 500 IDs |
 
 ### Known Gaps
 
 - **No TLS** — Heimdall listens on plain HTTP. For any network-exposed deployment, place behind nginx, Caddy, or use Tailscale.
+- **Webhook DNS rebinding** — the SSRF check resolves the hostname before delivery and the connection resolves it again, so a hostname whose DNS answer changes in between could reach a blocked address. Only admins can configure webhook URLs.
 - **No admin audit log** — user creation and role changes are not currently written to a dedicated audit trail.
 
 ---
@@ -364,15 +380,15 @@ Go to **Settings → Webhooks → Add Webhook**. Configure:
 **Requirements:** `esbuild` (`npm install -g esbuild`), `dpkg-deb`
 
 ```bash
-# Build default version (1.4.2)
+# Build default version (1.4.4)
 bash build-deb.sh
 
 # Build a specific version
-bash build-deb.sh 1.4.3
+bash build-deb.sh 1.4.5
 
 # Output
-# packaging/build/heimdall-ids_1.4.2_all.deb
-# packaging/build/heimdall-ids-noai_1.4.2_all.deb
+# packaging/build/heimdall-ids_1.4.4_all.deb
+# packaging/build/heimdall-ids-noai_1.4.4_all.deb
 ```
 
 The build script:
@@ -382,11 +398,41 @@ The build script:
 4. Runs `dpkg-deb` to produce the `.deb`
 5. Repeats steps 1–4 for the AI-free `noai` variant via `strip-ai.py`
 
+**Tests:** `python3 -m unittest discover -s tests -v` runs the regression and fix suites (stdlib only; the skin-loader check also needs `node`). The `tests/` directory is not packaged.
+
 **Asset caching model:** `index.html` is served `no-cache` so the browser always fetches it fresh. All JS, CSS, and fonts are served `immutable` with `?v=VERSION` appended to their URLs. When a new version is installed, the URL changes and the browser automatically fetches the updated files — no hard reload or cache clearing needed. **Always increment the version on every build** (`bash build-deb.sh 1.4.1`, `bash build-deb.sh 1.4.2`, etc.) — that is the only discipline required.
 
 ---
 
 ## Changelog
+
+### v1.4.4 — September 2026
+
+Security and correctness fixes from a code audit, plus AI model selection. One additive schema change: a `models` column on `ai_settings` (added automatically on startup; existing settings are preserved and older versions ignore it).
+
+**Security:**
+- **Webhooks are admin-only at the API.** Any logged-in user (including Viewer) could list webhooks (exposing Slack/Discord secret URLs), create or edit them — including with *Allow local* — and use **Test** to make the server POST to internal hosts. All webhook endpoints now require the Admin role, matching the UI.
+- **SSRF filter bypasses closed.** `0.0.0.0` (which reaches localhost on Linux), IPv4-mapped IPv6 such as `::ffff:127.0.0.1`, `100.64.0.0/10`, `::` and `fe80::/10` passed the private-address check; redirects were followed to unchecked hosts. Webhooks to CGNAT/Tailscale addresses now need *Allow local*.
+- **Legacy install password removed.** The password generated at install kept logging in as admin forever — after the admin password was changed in the UI, with a blank username, and even for a disabled or deleted admin. Login now uses the user table only; `heimdall --password` remains the recovery path and always restores a working, enabled admin.
+- **Sessions follow the account.** Disabling, deleting or demoting a user had no effect on their sessions for up to 7 days. Sessions are now checked against the user's current account on every request (live SSE streams are closed within one keep-alive), and password reset, disable and delete revoke sessions. Sessions of deleted/disabled users left by older versions are purged at startup.
+- **AI Explain cannot be abused.** `/ai-explain` sent any client-supplied text to the paid provider for any role. Prompts are now built from the stored alert only.
+
+**Fixes:**
+- **Flush all** failed with HTTP 500 after deleting alerts, flows and HTTP records, leaving DNS untouched (it targeted a non-existent `dns_queries` table).
+- **Replay** now applies suppression rules; suppressed alerts were re-ingested. Replay status gains a `suppressed` count.
+- **`/etc/heimdall/heimdall.conf` is now read.** It was ignored, and the documented `--skin`, `--ai-provider` and `--ai-key` options did not exist. See *Configuration* — options already uncommented there take effect on upgrade.
+- **AI cost no longer scales with open tabs.** Each open tab requested its own summary of every alert; summaries are now cached per alert on the server and concurrent requests share one call.
+- **Timestamps with non-UTC offsets** (e.g. `+0100`) were replaced by the ingestion time on Python 3.10, and flow durations were 0. The alert timestamp is now included in AI prompts.
+- SSE streams ended by the server now close the connection instead of hanging.
+
+**AI model selection:**
+- Every provider now has a selectable **Model**. **Load models** lists the models your key can use straight from the provider, so new models can be used without waiting for a Heimdall release; any model ID can also be typed in. Each provider remembers its own choice.
+- The Anthropic default is now `claude-haiku-4-5-20251001`; `claude-3-5-haiku-20241022` was retired by Anthropic in February 2026, so the Anthropic provider had stopped working. OpenAI and DeepSeek defaults are unchanged.
+- OpenAI requests use `max_completion_tokens` (required by OpenAI reasoning models); the output cap is 1,024 tokens for all providers (was 300). Provider errors are now readable (e.g. "Anthropic returned HTTP 404: model not found") and never echo API keys.
+
+**Docs:** triage statuses, Analyst permissions, database table names and configuration corrected to match the code. Added a stdlib-only test suite (`tests/`).
+
+---
 
 ### v1.4.2 — May 2026
 

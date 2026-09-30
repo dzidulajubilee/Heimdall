@@ -2,10 +2,10 @@
 Heimdall IDS Dashboard — User Management (RBAC)
 Manages user accounts with role-based access control.
 
-Roles:
-  admin   — full access: all views, clear data, webhooks, user management
-  analyst — read access: all views, no clear/delete, no webhooks/settings
-  viewer  — stream only: alerts view only, no detail panel, no controls
+Roles (as enforced by the API in handlers.py):
+  admin   — full access: users, webhooks, AI config, suppression, clear/flush/replay
+  analyst — alert triage (status, notes, bulk status), threat intel create/edit/import
+  viewer  — read-only access to all views (including AI summaries)
 
 Password storage: PBKDF2-SHA256 via shared password_utils module.
 """
